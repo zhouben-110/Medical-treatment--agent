@@ -1,0 +1,80 @@
+<h2>API接口设计</h2>
+<p class="subtitle">FastAPI后端接口定义</p>
+
+<div class="section">
+  <h3>核心接口</h3>
+  <div class="mockup">
+    <div class="mockup-header">API Endpoints</div>
+    <div class="mockup-body">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="background:#e8f5e9;padding:12px;border-radius:8px;">
+          <strong style="color:#4caf50;">POST</strong> <code>/api/chat</code>
+          <p style="margin:4px 0 0 0;font-size:14px;">发送消息，获取AI回复</p>
+          <pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;margin-top:8px;">
+请求: { message: string, session_id?: string }
+响应: { reply: string, stage: string, symptoms: string[] }</pre>
+        </div>
+        <div style="background:#e3f2fd;padding:12px;border-radius:8px;">
+          <strong style="color:#2196f3;">GET</strong> <code>/api/history</code>
+          <p style="margin:4px 0 0 0;font-size:14px;">获取用户历史对话列表</p>
+          <pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;margin-top:8px;">
+响应: { sessions: [{ id, title, created_at, message_count }] }</pre>
+        </div>
+        <div style="background:#e3f2fd;padding:12px;border-radius:8px;">
+          <strong style="color:#2196f3;">GET</strong> <code>/api/history/{session_id}</code>
+          <p style="margin:4px 0 0 0;font-size:14px;">获取指定会话的详细记录</p>
+          <pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;margin-top:8px;">
+响应: { messages: [{ role, content, timestamp }], diagnosis: string }</pre>
+        </div>
+        <div style="background:#fff3e0;padding:12px;border-radius:8px;">
+          <strong style="color:#ff9800;">GET</strong> <code>/api/symptoms</code>
+          <p style="margin:4px 0 0 0;font-size:14px;">获取症状分类列表</p>
+          <pre style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;margin-top:8px;">
+响应: { categories: [{ name, symptoms: string[] }] }</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>数据模型</h3>
+  <div class="mockup">
+    <div class="mockup-header">Database Schema</div>
+    <div class="mockup-body">
+      <pre style="background:#f5f5f5;padding:12px;border-radius:4px;font-size:14px;">
+-- 用户表
+users: id, created_at
+
+-- 会话表
+sessions: id, user_id, title, created_at, diagnosis
+
+-- 消息表
+messages: id, session_id, role, content, timestamp
+
+-- 症状分类表（预置数据）
+symptom_categories: id, name
+symptoms: id, category_id, name</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>API设计如何？</h3>
+  <div class="options">
+    <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+      <div class="letter">✓</div>
+      <div class="content">
+        <h3>没问题</h3>
+        <p>继续下一个部分</p>
+      </div>
+    </div>
+    <div class="option" data-choice="revise" onclick="toggleSelect(this)">
+      <div class="letter">✎</div>
+      <div class="content">
+        <h3>需要调整</h3>
+        <p>我有修改建议</p>
+      </div>
+    </div>
+  </div>
+</div>

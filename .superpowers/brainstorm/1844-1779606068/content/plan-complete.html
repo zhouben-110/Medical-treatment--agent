@@ -1,0 +1,46 @@
+<h2>实现计划已完成</h2>
+<p class="subtitle">计划已保存到 docs/superpowers/plans/2026-05-24-medical-agent.md</p>
+
+<div class="section">
+  <h3>计划概览</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-body">
+        <h3>11个任务</h3>
+        <p>后端7个 + 前端3个 + 测试1个</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>完整代码</h3>
+        <p>每个步骤都有可执行的代码</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <h3>TDD驱动</h3>
+        <p>测试先行，验证后提交</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>选择执行方式</h3>
+  <div class="options">
+    <div class="option" data-choice="subagent" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>子代理驱动（推荐）</h3>
+        <p>每个任务分发给独立子代理执行，任务间自动审查，迭代快</p>
+      </div>
+    </div>
+    <div class="option" data-choice="inline" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>内联执行</h3>
+        <p>在当前会话中逐步执行，批量处理带检查点</p>
+      </div>
+    </div>
+  </div>
+</div>

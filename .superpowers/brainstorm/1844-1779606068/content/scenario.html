@@ -1,0 +1,48 @@
+<h2>使用场景确认</h2>
+<p class="subtitle">个人健康助手 — 普通用户描述症状，获取初步建议</p>
+
+<div class="section">
+  <h3>核心功能流程</h3>
+  <div class="mockup">
+    <div class="mockup-header">用户交互流程</div>
+    <div class="mockup-body">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div class="placeholder">用户描述症状</div>
+        <span>→</span>
+        <div class="placeholder">AI分析症状</div>
+        <span>→</span>
+        <div class="placeholder">匹配疾病</div>
+        <span>→</span>
+        <div class="placeholder">给出治疗建议</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>需要澄清的问题</h3>
+  <p>治疗方案的数据来源是什么？</p>
+  <div class="options">
+    <div class="option" data-choice="a" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>LLM知识库</h3>
+        <p>依赖大模型内置的医学知识，简单但可能不够专业</p>
+      </div>
+    </div>
+    <div class="option" data-choice="b" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>RAG检索增强</h3>
+        <p>接入医学文献/指南，更专业准确</p>
+      </div>
+    </div>
+    <div class="option" data-choice="c" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>混合模式</h3>
+        <p>LLM + RAG结合，平衡成本与准确性</p>
+      </div>
+    </div>
+  </div>
+</div>
