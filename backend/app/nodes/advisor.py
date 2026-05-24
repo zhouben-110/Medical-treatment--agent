@@ -4,7 +4,12 @@ from app.state import MedicalAgentState
 from app.config import get_settings
 
 settings = get_settings()
-llm = ChatOpenAI(api_key=settings.openai_api_key, model=settings.openai_model, temperature=0.3)
+llm = ChatOpenAI(
+    api_key=settings.llm_api_key,
+    model=settings.llm_model,
+    base_url=settings.llm_base_url,
+    temperature=0.3
+)
 
 ADVICE_PROMPT = """你是一个医疗AI助手。根据诊断结果，生成治疗建议。
 

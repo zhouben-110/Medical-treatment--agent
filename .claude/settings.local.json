@@ -5,7 +5,15 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(pip install *)",
+      "Bash(python -c \"from app.config import Settings, get_settings; s = Settings\\(\\); print\\(f'Config OK: app_name={s.app_name}, db_url={s.database_url}'\\)\")",
+      "Bash(pip show *)",
+      "Bash(python -c \"import asyncio; from app.database import init_db; asyncio.run\\(init_db\\(\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(pip list *)",
+      "Bash(pytest tests/ -v)",
+      "Bash(python -c \"from app.main import app; print\\('Import successful'\\)\")"
     ]
   }
 }
