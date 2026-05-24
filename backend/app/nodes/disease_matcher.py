@@ -30,6 +30,8 @@ reason: 判断依据"""
 
 async def match_diseases(state: MedicalAgentState) -> dict:
     """匹配可能的疾病"""
+    import re
+
     prompt = ChatPromptTemplate.from_template(DISEASE_MATCH_PROMPT)
     chain = prompt | llm
 
@@ -42,16 +44,26 @@ async def match_diseases(state: MedicalAgentState) -> dict:
 
     content = response.content
     diseases = []
-    confidence = 0.0
+    confidence = 0.5
 
     for line in content.split("\n"):
         if line.startswith("disease"):
-            parts = line.split(":")[1].strip()
-            disease_name = parts.split("(")[0].strip()
-            conf_str = parts.split("(")[1].replace("%)", "").strip() if "(" in parts else "50"
-            diseases.append(disease_name)
-            if not confidence:
-                confidence = float(conf_str) / 100
+            parts = line.split(":", 1)
+            if len(parts) < 2:
+                continue
+            rest = parts[1].strip()
+            # 提取疾病名称和置信度
+            match = re.match(r'(.+?)\s*\((\d+)%?\)', rest)
+            if match:
+                disease_name = match.group(1).strip()
+                try:
+                    confidence = int(match.group(2)) / 100
+                except ValueError:
+                    confidence = 0.5
+            else:
+                disease_name = rest.split("(")[0].strip()
+            if disease_name:
+                diseases.append(disease_name)
 
     return {
         "possible_diseases": diseases,
