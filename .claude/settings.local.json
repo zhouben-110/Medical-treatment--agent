@@ -14,7 +14,10 @@
       "Bash(pip list *)",
       "Bash(pytest tests/ -v)",
       "Bash(python -c \"from app.main import app; print\\('Import successful'\\)\")",
-      "Bash(python seed_data.py)"
+      "Bash(python seed_data.py)",
+      "Bash(uvicorn app.main:app --reload --port 8000)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl *)"
     ]
   }
 }

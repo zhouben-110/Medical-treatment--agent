@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Message, Session } from '@/types';
-import { sendMessage, getHistory, getSessionDetail } from '@/api/client';
+import { sendMessageStream, getHistory, getSessionDetail } from '@/api/client';
 import MessageBubble from './MessageBubble';
 import SymptomTags from './SymptomTags';
 import Sidebar from './Sidebar';
@@ -40,21 +40,47 @@ export default function ChatWindow() {
 
     const userMessage: Message = { role: 'user', content: input };
     setMessages((prev) => [...prev, userMessage]);
+    const userMsg = input;
     setInput('');
     setLoading(true);
 
-    try {
-      const response = await sendMessage(input, currentSessionId);
-      const aiMessage: Message = { role: 'assistant', content: response.reply };
-      setMessages((prev) => [...prev, aiMessage]);
-      setSymptoms(response.symptoms);
-      setCurrentSessionId(response.session_id);
-      loadHistory();
-    } catch (error) {
-      console.error('Failed to send message:', error);
-    } finally {
-      setLoading(false);
-    }
+    // 添加空的AI消息用于流式更新
+    const aiMessage: Message = { role: 'assistant', content: '' };
+    setMessages((prev) => [...prev, aiMessage]);
+
+    sendMessageStream(
+      userMsg,
+      currentSessionId,
+      // onChunk
+      (chunk) => {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant') {
+            updated[updated.length - 1] = {
+              ...lastMsg,
+              content: lastMsg.content + chunk,
+            };
+          }
+          return updated;
+        });
+      },
+      // onMeta
+      (meta) => {
+        setSymptoms(meta.symptoms);
+        setCurrentSessionId(meta.session_id);
+      },
+      // onDone
+      () => {
+        setLoading(false);
+        loadHistory();
+      },
+      // onError
+      (error) => {
+        console.error('Failed to send message:', error);
+        setLoading(false);
+      }
+    );
   };
 
   const handleNewSession = () => {

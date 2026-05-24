@@ -43,3 +43,17 @@ async def generate_advice(state: MedicalAgentState) -> dict:
         "treatment_plan": response.content,
         "current_stage": "completed"
     }
+
+
+async def generate_advice_stream(diseases: list, symptoms: list, confidence: float):
+    """流式生成治疗建议"""
+    prompt = ChatPromptTemplate.from_template(ADVICE_PROMPT)
+    chain = prompt | llm
+
+    async for chunk in chain.astream({
+        "diseases": ", ".join(diseases),
+        "symptoms": ", ".join(symptoms),
+        "confidence": f"{confidence * 100:.0f}%"
+    }):
+        if chunk.content:
+            yield chunk.content
