@@ -30,7 +30,7 @@ async def generate_question(state: MedicalAgentState) -> dict:
     prompt = ChatPromptTemplate.from_template(QUESTION_PROMPT)
     chain = prompt | llm
 
-    history = "\n".join([f"{m['role']}: {m['content']}" for m in state.get("messages", [])[-5:]])
+    history = "\n".join([f"{m.type}: {m.content}" for m in state.get("messages", [])[-5:]])
 
     response = await chain.ainvoke({
         "symptoms": ", ".join(state.get("symptoms", [])),

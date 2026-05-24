@@ -57,7 +57,8 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     result = await medical_graph.ainvoke(initial_state)
 
     # 获取AI回复
-    ai_reply = result["messages"][-1]["content"] if result["messages"] else "抱歉，我无法处理您的请求。"
+    last_msg = result["messages"][-1] if result["messages"] else None
+    ai_reply = last_msg.content if last_msg else "抱歉，我无法处理您的请求。"
 
     # 保存AI回复
     ai_msg = Message(

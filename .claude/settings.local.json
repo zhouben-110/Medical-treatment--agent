@@ -13,7 +13,8 @@
       "Bash(python -c ' *)",
       "Bash(pip list *)",
       "Bash(pytest tests/ -v)",
-      "Bash(python -c \"from app.main import app; print\\('Import successful'\\)\")"
+      "Bash(python -c \"from app.main import app; print\\('Import successful'\\)\")",
+      "Bash(python seed_data.py)"
     ]
   }
 }
