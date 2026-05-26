@@ -1,4 +1,4 @@
-import { ChatResponse, Session, SymptomCategory } from '@/types';
+import { ChatResponse, ChatStage, Session, StreamMeta, SymptomCategory } from '@/types';
 
 const API_BASE = '/api';
 
@@ -14,8 +14,9 @@ export async function sendMessage(message: string, sessionId?: string): Promise<
 export function sendMessageStream(
   message: string,
   sessionId: string | undefined,
-  onChunk: (content: string) => void,
-  onMeta: (meta: { session_id: string; symptoms: string[] }) => void,
+  onChunk: (content: string, stage: ChatStage) => void,
+  onMeta: (meta: StreamMeta) => void,
+  onStage: (stage: ChatStage) => void,
   onDone: () => void,
   onError: (error: Error) => void
 ): () => void {
@@ -36,6 +37,34 @@ export function sendMessageStream(
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let doneCalled = false;
+
+    const safeOnDone = () => {
+      if (!doneCalled) {
+        doneCalled = true;
+        onDone();
+      }
+    };
+
+    const handleEvent = (data: any) => {
+      if (data.type === 'meta') {
+        onMeta({
+          session_id: data.session_id,
+          symptoms: data.symptoms,
+          stage: data.stage,
+          need_more_info: data.need_more_info,
+          possible_diseases: data.possible_diseases,
+        });
+      } else if (data.type === 'stage') {
+        onStage(data.stage);
+      } else if (data.type === 'chunk') {
+        onChunk(data.content, data.stage);
+      } else if (data.type === 'done') {
+        safeOnDone();
+      } else if (data.type === 'error') {
+        onError(new Error(data.content || 'stream error'));
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -48,20 +77,23 @@ export function sendMessageStream(
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'meta') {
-              onMeta({ session_id: data.session_id, symptoms: data.symptoms });
-            } else if (data.type === 'chunk') {
-              onChunk(data.content);
-            } else if (data.type === 'done') {
-              onDone();
-            }
+            handleEvent(JSON.parse(line.slice(6)));
           } catch (e) {
             // ignore parse errors
           }
         }
       }
     }
+
+    if (buffer.startsWith('data: ')) {
+      try {
+        handleEvent(JSON.parse(buffer.slice(6)));
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    safeOnDone();
   }).catch((err) => {
     if (err.name !== 'AbortError') {
       onError(err);

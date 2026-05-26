@@ -4,8 +4,10 @@ os.environ["OPENAI_API_KEY"] = "sk-test-dummy-key-for-testing"
 
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
 from app.main import app
 
 
@@ -14,6 +16,13 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+def _snap(values=None, created_at=None):
+    s = MagicMock()
+    s.created_at = created_at
+    s.values = values or {}
+    return s
 
 
 @pytest.mark.asyncio
@@ -34,14 +43,15 @@ async def test_get_symptoms(client):
 @pytest.mark.asyncio
 async def test_chat(client):
     mock_result = {
-        "messages": [{"role": "assistant", "content": "您好，我理解您最近有头痛的症状。请问头痛持续多久了？"}],
+        "messages": [AIMessage(content="您好，请问头痛持续多久了？")],
         "symptoms": ["头痛"],
-        "current_stage": "analyzing",
+        "current_stage": "questioning",
         "need_more_info": True,
         "possible_diseases": [],
-        "treatment_plan": ""
+        "treatment_plan": "",
     }
-    with patch("app.routers.chat.medical_graph") as mock_graph:
+    with patch("app.graph.medical_graph") as mock_graph:
+        mock_graph.aget_state = AsyncMock(return_value=_snap(created_at=None))
         mock_graph.ainvoke = AsyncMock(return_value=mock_result)
         response = await client.post("/api/chat", json={
             "message": "我最近总是头痛"
@@ -50,6 +60,8 @@ async def test_chat(client):
         data = response.json()
         assert "reply" in data
         assert "session_id" in data
+        assert data["stage"] == "questioning"
+        assert data["need_more_info"] is True
 
 
 @pytest.mark.asyncio

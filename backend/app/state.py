@@ -18,4 +18,4 @@ class MedicalAgentState(TypedDict):
     treatment_plan: str
     need_more_info: bool
     session_id: str
-    user_message: str
+    retrieved_context: str

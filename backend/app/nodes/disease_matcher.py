@@ -11,12 +11,18 @@ llm = ChatOpenAI(
     temperature=0
 )
 
-DISEASE_MATCH_PROMPT = """你是一个医疗AI助手。根据症状组合，匹配可能的疾病。
+# 由 main.py lifespan 注入
+retriever = None
+
+DISEASE_MATCH_PROMPT = """你是一个医疗AI助手。根据症状组合和医学知识库，匹配可能的疾病。
 
 症状列表: {symptoms}
 对话历史: {conversation_history}
 
-请返回:
+医学知识参考:
+{medical_context}
+
+请基于以上医学知识参考，返回:
 1. 可能的疾病列表（最多3个，按可能性排序）
 2. 每个疾病的置信度（0-100）
 3. 简要说明判断依据
@@ -32,14 +38,31 @@ async def match_diseases(state: MedicalAgentState) -> dict:
     """匹配可能的疾病"""
     import re
 
+    symptoms = state.get("symptoms", [])
+
+    # RAG 检索
+    medical_context = ""
+    if retriever:
+        try:
+            medical_context = await retriever.retrieve_for_diagnosis(symptoms)
+        except Exception as e:
+            print(f"RAG retrieval error in diagnose: {e}")
+
     prompt = ChatPromptTemplate.from_template(DISEASE_MATCH_PROMPT)
     chain = prompt | llm
 
-    history = "\n".join([f"{m.type}: {m.content}" for m in state.get("messages", [])[-5:]])
+    history_msgs = state.get("messages", [])[-5:]
+    history_lines = []
+    for m in history_msgs:
+        role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else "?")
+        text = getattr(m, "content", None) or (m.get("content", "") if isinstance(m, dict) else "")
+        history_lines.append(f"{role}: {text}")
+    history = "\n".join(history_lines)
 
     response = await chain.ainvoke({
-        "symptoms": ", ".join(state.get("symptoms", [])),
-        "conversation_history": history
+        "symptoms": ", ".join(symptoms),
+        "conversation_history": history,
+        "medical_context": medical_context or "（无相关知识库数据）",
     })
 
     content = response.content
@@ -52,7 +75,6 @@ async def match_diseases(state: MedicalAgentState) -> dict:
             if len(parts) < 2:
                 continue
             rest = parts[1].strip()
-            # 提取疾病名称和置信度
             match = re.match(r'(.+?)\s*\((\d+)%?\)', rest)
             if match:
                 disease_name = match.group(1).strip()
@@ -68,5 +90,6 @@ async def match_diseases(state: MedicalAgentState) -> dict:
     return {
         "possible_diseases": diseases,
         "confidence": confidence,
-        "current_stage": "diagnosing"
+        "current_stage": "diagnosing",
+        "retrieved_context": medical_context,
     }

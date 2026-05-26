@@ -28,26 +28,46 @@ severity: 轻度/中度/重度
 need_more_info: true/false"""
 
 
+def _extract_latest_user_message(messages) -> str:
+    for m in reversed(messages or []):
+        role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None)
+        if role in ("human", "user"):
+            return getattr(m, "content", None) or (m.get("content", "") if isinstance(m, dict) else "")
+    return ""
+
+
+def _grab_line(content: str, prefix: str) -> str | None:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(prefix.lower()):
+            return stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+    return None
+
+
 async def analyze_symptoms(state: MedicalAgentState) -> dict:
     """从用户消息中提取症状"""
+    user_message = _extract_latest_user_message(state.get("messages", []))
+
     prompt = ChatPromptTemplate.from_template(SYMPTOM_ANALYSIS_PROMPT)
     chain = prompt | llm
 
     response = await chain.ainvoke({
-        "user_message": state["user_message"],
+        "user_message": user_message,
         "existing_symptoms": ", ".join(state.get("symptoms", []))
     })
-
     content = response.content
-    # 解析响应
-    symptoms_line = [line for line in content.split("\n") if line.startswith("symptoms:")][0]
-    new_symptoms = [s.strip() for s in symptoms_line.replace("symptoms:", "").split(",") if s.strip()]
 
-    need_more_line = [line for line in content.split("\n") if line.startswith("need_more_info:")][0]
-    need_more = "true" in need_more_line.lower()
+    symptoms_str = _grab_line(content, "symptoms") or _grab_line(content, "症状")
+    new_symptoms = [s.strip() for s in (symptoms_str or "").split(",") if s.strip()]
 
-    # 合并症状
-    all_symptoms = list(set(state.get("symptoms", []) + new_symptoms))
+    need_more_str = _grab_line(content, "need_more_info")
+    if need_more_str is None:
+        need_more = state.get("need_more_info", True)
+    else:
+        need_more = "true" in need_more_str.lower()
+
+    # 保持顺序去重
+    all_symptoms = list(dict.fromkeys((state.get("symptoms") or []) + new_symptoms))
 
     return {
         "symptoms": all_symptoms,

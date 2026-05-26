@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Message, Session } from '@/types';
+import { ChatStage, Message, Session } from '@/types';
 import { sendMessageStream, getHistory, getSessionDetail } from '@/api/client';
 import MessageBubble from './MessageBubble';
 import SymptomTags from './SymptomTags';
@@ -14,6 +14,7 @@ export default function ChatWindow() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
   const [symptoms, setSymptoms] = useState<string[]>([]);
+  const [needMoreInfo, setNeedMoreInfo] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,6 +34,18 @@ export default function ChatWindow() {
     const data = await getSessionDetail(sessionId);
     setMessages(data.messages);
     setCurrentSessionId(sessionId);
+    setNeedMoreInfo(false);
+  };
+
+  const setLastAssistantStage = (stage: ChatStage) => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const lastMsg = updated[updated.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        updated[updated.length - 1] = { ...lastMsg, stage };
+      }
+      return updated;
+    });
   };
 
   const handleSend = async () => {
@@ -43,8 +56,8 @@ export default function ChatWindow() {
     const userMsg = input;
     setInput('');
     setLoading(true);
+    setNeedMoreInfo(false);
 
-    // 添加空的AI消息用于流式更新
     const aiMessage: Message = { role: 'assistant', content: '' };
     setMessages((prev) => [...prev, aiMessage]);
 
@@ -52,7 +65,7 @@ export default function ChatWindow() {
       userMsg,
       currentSessionId,
       // onChunk
-      (chunk) => {
+      (chunk, stage) => {
         setMessages((prev) => {
           const updated = [...prev];
           const lastMsg = updated[updated.length - 1];
@@ -60,6 +73,7 @@ export default function ChatWindow() {
             updated[updated.length - 1] = {
               ...lastMsg,
               content: lastMsg.content + chunk,
+              stage: lastMsg.stage ?? stage,
             };
           }
           return updated;
@@ -67,8 +81,14 @@ export default function ChatWindow() {
       },
       // onMeta
       (meta) => {
-        setSymptoms(meta.symptoms);
-        setCurrentSessionId(meta.session_id);
+        if (meta.session_id) setCurrentSessionId(meta.session_id);
+        if (meta.symptoms) setSymptoms(meta.symptoms);
+        if (typeof meta.need_more_info === 'boolean') setNeedMoreInfo(meta.need_more_info);
+        if (meta.stage) setLastAssistantStage(meta.stage);
+      },
+      // onStage
+      (stage) => {
+        setLastAssistantStage(stage);
       },
       // onDone
       () => {
@@ -78,6 +98,17 @@ export default function ChatWindow() {
       // onError
       (error) => {
         console.error('Failed to send message:', error);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastMsg = updated[updated.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '') {
+            updated[updated.length - 1] = {
+              ...lastMsg,
+              content: `请求失败：${error.message || '无法连接到后端服务'}`,
+            };
+          }
+          return updated;
+        });
         setLoading(false);
       }
     );
@@ -87,6 +118,7 @@ export default function ChatWindow() {
     setMessages([]);
     setCurrentSessionId(undefined);
     setSymptoms([]);
+    setNeedMoreInfo(false);
   };
 
   return (
@@ -129,7 +161,7 @@ export default function ChatWindow() {
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSend()}
               className="flex-1 p-2 border rounded focus:outline-none focus:border-blue-500"
-              placeholder="描述您的症状..."
+              placeholder={needMoreInfo ? '请回答上面的追问...' : '描述您的症状...'}
               disabled={loading}
             />
             <button

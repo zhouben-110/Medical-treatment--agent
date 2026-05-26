@@ -13,6 +13,8 @@ class ChatResponse(BaseModel):
     stage: str
     symptoms: List[str]
     session_id: str
+    need_more_info: bool = False
+    possible_diseases: List[str] = []
 
 
 class MessageResponse(BaseModel):

@@ -1,43 +1,45 @@
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 from app.state import MedicalAgentState
 from app.nodes import analyze_symptoms, generate_question, match_diseases, generate_advice
 
+MAX_USER_TURNS = 5
 
-def should_continue(state: MedicalAgentState) -> str:
-    """判断是否需要继续追问"""
-    if state.get("need_more_info", True) and len(state.get("messages", [])) < 10:
+
+def _count_user_turns(messages) -> int:
+    count = 0
+    for m in messages or []:
+        role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None)
+        if role in ("human", "user"):
+            count += 1
+    return count
+
+
+def route_after_analyze(state: MedicalAgentState) -> str:
+    user_turns = _count_user_turns(state.get("messages", []))
+    if state.get("need_more_info", True) and user_turns < MAX_USER_TURNS:
         return "question"
     return "diagnose"
 
 
-def create_medical_graph():
-    """创建医疗诊断状态机"""
+def build_graph() -> StateGraph:
     workflow = StateGraph(MedicalAgentState)
-
-    # 添加节点
     workflow.add_node("analyze", analyze_symptoms)
     workflow.add_node("question", generate_question)
     workflow.add_node("diagnose", match_diseases)
     workflow.add_node("advise", generate_advice)
 
-    # 设置入口
     workflow.set_entry_point("analyze")
-
-    # 添加边
     workflow.add_conditional_edges(
         "analyze",
-        should_continue,
-        {
-            "question": "question",
-            "diagnose": "diagnose"
-        }
+        route_after_analyze,
+        {"question": "question", "diagnose": "diagnose"}
     )
-    workflow.add_edge("question", "analyze")
+    workflow.add_edge("question", END)
     workflow.add_edge("diagnose", "advise")
     workflow.add_edge("advise", END)
+    return workflow
 
-    return workflow.compile()
 
-
-# 全局图实例
-medical_graph = create_medical_graph()
+# 由 main.py 的 lifespan 在注入 checkpointer 后赋值
+medical_graph: CompiledStateGraph | None = None
