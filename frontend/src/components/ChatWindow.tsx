@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { ChatStage, Message, Session } from '@/types';
-import { sendMessageStream, getHistory, getSessionDetail } from '@/api/client';
+import { sendMessageStream, getHistory, getSessionDetail, deleteSession } from '@/api/client';
 import MessageBubble from './MessageBubble';
 import SymptomTags from './SymptomTags';
 import Sidebar from './Sidebar';
@@ -121,6 +121,20 @@ export default function ChatWindow() {
     setNeedMoreInfo(false);
   };
 
+  const handleDeleteSession = async (sessionId: string) => {
+    try {
+      await deleteSession(sessionId);
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+      alert(err instanceof Error ? err.message : '删除失败');
+      return;
+    }
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    if (currentSessionId === sessionId) {
+      handleNewSession();
+    }
+  };
+
   return (
     <div className="flex h-screen">
       <Sidebar
@@ -128,6 +142,7 @@ export default function ChatWindow() {
         currentSessionId={currentSessionId}
         onSelectSession={loadSession}
         onNewSession={handleNewSession}
+        onDeleteSession={handleDeleteSession}
       />
       <div className="flex-1 flex flex-col">
         <div className="flex-1 overflow-y-auto p-4">

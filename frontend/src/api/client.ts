@@ -113,6 +113,15 @@ export async function getSessionDetail(sessionId: string) {
   return response.json();
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/history/${sessionId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(`删除失败 (${response.status})`);
+  }
+}
+
 export async function getSymptoms(): Promise<{ categories: SymptomCategory[] }> {
   const response = await fetch(`${API_BASE}/symptoms`);
   return response.json();
