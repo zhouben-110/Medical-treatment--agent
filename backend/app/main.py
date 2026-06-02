@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager, AsyncExitStack
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app import graph as graph_module
 from app.routers import chat, history, symptoms
@@ -29,9 +29,11 @@ async def lifespan(app: FastAPI):
         print(f"Warning: RAG initialization failed, running without RAG: {e}")
 
     async with AsyncExitStack() as stack:
+        conn_str = settings.database_url.replace("+asyncpg", "")
         saver = await stack.enter_async_context(
-            AsyncSqliteSaver.from_conn_string("./medical_agent_checkpoints.db")
+            AsyncPostgresSaver.from_conn_string(conn_str)
         )
+        await saver.setup()
         graph_module.medical_graph = graph_module.build_graph().compile(checkpointer=saver)
         yield
 
