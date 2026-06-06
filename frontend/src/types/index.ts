@@ -1,6 +1,7 @@
 export type ChatStage = 'analyzing' | 'questioning' | 'diagnosing' | 'completed' | 'unknown';
 
 export interface Message {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
   stage?: ChatStage;

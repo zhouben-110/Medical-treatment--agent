@@ -50,7 +50,11 @@
       "Bash(sed 's/=.*$/=***REDACTED***/')",
       "Bash(python -c \"from app.rag.knowledge_base import search_by_symptoms; print\\(search_by_symptoms\\(['头痛', '发热', '咳嗽']\\)\\)\")",
       "Bash(timeout 15 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(git worktree *)"
     ]
   }
 }

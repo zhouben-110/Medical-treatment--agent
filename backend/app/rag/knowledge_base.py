@@ -205,19 +205,25 @@ DISEASE_KNOWLEDGE = [
 
 
 def search_by_symptoms(symptoms: list[str]) -> list[dict]:
-    """基于症状交集匹配疾病，按匹配度排序返回"""
+    """基于 Dice 相似系数匹配疾病，按匹配度排序返回。
+
+    使用 Dice = 2*|A∩B| / (|A|+|B|) 替代原来的 |A∩B|/|B|，
+    避免短症状列表疾病天然占优的偏差。
+    """
     if not symptoms:
         return []
 
     results = []
     symptom_set = set(s.strip() for s in symptoms if s.strip())
+    user_count = len(symptom_set)
 
     for entry in DISEASE_KNOWLEDGE:
         disease_symptoms = set(entry["symptoms"])
         matched = symptom_set & disease_symptoms
         if not matched:
             continue
-        score = len(matched) / len(disease_symptoms)
+        disease_count = len(disease_symptoms)
+        score = 2 * len(matched) / (disease_count + user_count)
         results.append({
             "disease": entry["disease"],
             "matched_symptoms": list(matched),

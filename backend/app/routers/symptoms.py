@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
-from app.models import SymptomListResponse, SymptomCategoryResponse
-from app.schemas import SymptomCategory, Symptom
+from app.schemas import SymptomListResponse, SymptomCategoryResponse
+from app.models import SymptomCategory, Symptom
+from app.auth import verify_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 
 @router.get("/symptoms", response_model=SymptomListResponse)

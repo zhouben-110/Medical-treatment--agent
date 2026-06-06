@@ -42,7 +42,10 @@ class MedicalRetriever:
         return "\n\n".join(parts) if parts else ""
 
     async def retrieve_for_advice(self, diseases: list[str], symptoms: list[str]) -> str:
-        """advise 节点调用：按疾病名检索治疗指南"""
+        """advise 节点调用：按疾病名检索治疗指南
+
+        向量检索合并为单次查询，减少网络往返。
+        """
         parts = []
 
         # 1. 结构化查详情
@@ -58,17 +61,18 @@ class MedicalRetriever:
                 ]
                 parts.append("\n".join(lines))
 
-        # 2. 向量检索诊疗指南
-        for disease_name in diseases[:2]:
+        # 2. 向量检索诊疗指南（合并为单次查询）
+        if diseases:
+            merged_query = " ".join(f"{d} 治疗 用药 注意事项" for d in diseases[:2])
             try:
-                docs = await self.vector_store.ainvoke(f"{disease_name} 治疗 用药 注意事项")
+                docs = await self.vector_store.ainvoke(merged_query)
                 if docs:
-                    lines = [f"【{disease_name}相关文献】"]
-                    for i, doc in enumerate(docs[:2], 1):
+                    lines = ["【相关医学文献】"]
+                    for i, doc in enumerate(docs[:3], 1):
                         text = doc.page_content[:300].replace("\n", " ")
                         lines.append(f"{i}. {text}")
                     parts.append("\n".join(lines))
             except Exception as e:
-                print(f"[RAG] vector retrieve_for_advice({disease_name}) failed: {e}")
+                print(f"[RAG] vector retrieve_for_advice failed: {e}")
 
         return "\n\n".join(parts) if parts else ""

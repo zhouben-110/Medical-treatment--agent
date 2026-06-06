@@ -74,24 +74,28 @@ backend/
 ├── app/
 │   ├── config.py           # Pydantic Settings 配置
 │   ├── database.py         # SQLAlchemy 异步引擎
-│   ├── schemas.py          # ORM 模型（5 张业务表）
-│   ├── models.py           # Pydantic 请求/响应模型
+│   ├── models.py           # ORM 模型（5 张业务表）
+│   ├── schemas.py          # Pydantic 请求/响应模型
 │   ├── state.py            # LangGraph 状态定义
 │   ├── graph.py            # 状态机（4 节点）
-│   ├── main.py             # FastAPI 入口 + lifespan
+│   ├── main.py             # FastAPI 入口 + lifespan + /health
+│   ├── auth.py             # API Key 认证（hmac.compare_digest）
+│   ├── llm.py              # LLM 实例工厂（带缓存）
+│   ├── summarizer.py       # 对话摘要机制（>12 条消息触发）
+│   ├── cache.py            # 诊断结果缓存（1h TTL）
 │   ├── nodes/              # 状态机节点
 │   │   ├── symptom_analyzer.py
 │   │   ├── questioner.py
-│   │   ├── disease_matcher.py
+│   │   ├── disease_matcher.py  # 结构化 JSON 输出 + 缓存
 │   │   └── advisor.py
 │   ├── rag/                # RAG 检索
-│   │   ├── embeddings.py       # DashScope 嵌入
-│   │   ├── vector_store.py     # pgvector 初始化
-│   │   ├── retriever.py        # 混合检索器
-│   │   └── knowledge_base.py   # 结构化疾病库
+│   │   ├── embeddings.py       # DashScope 嵌入（自动分批）
+│   │   ├── vector_store.py     # pgvector 初始化（异步）
+│   │   ├── retriever.py        # 混合检索器（合并查询）
+│   │   └── knowledge_base.py   # 结构化疾病库（Dice 匹配）
 │   └── routers/            # API 路由
-│       ├── chat.py         # 对话（含 SSE 流式）
-│       ├── history.py      # 历史记录
+│       ├── chat.py         # 对话（含 SSE 流式 + 进度事件）
+│       ├── history.py      # 历史记录（单次查询）
 │       └── symptoms.py     # 症状列表
 ├── alembic/                # 数据库迁移
 ├── data/guidelines/        # 医学指南（9 篇 .md）
@@ -102,6 +106,9 @@ frontend/
 │   ├── app/                # Next.js 页面
 │   ├── api/client.ts       # API 客户端
 │   ├── types/index.ts      # TypeScript 类型
+│   ├── hooks/              # 自定义 Hook
+│   │   ├── useChat.ts          # 聊天状态管理
+│   │   └── useSession.ts       # 会话管理
 │   └── components/         # UI 组件
 └── next.config.js          # API 代理
 ```
@@ -128,6 +135,7 @@ frontend/
 | GET | `/api/history/{id}` | 会话详情 |
 | DELETE | `/api/history/{id}` | 删除会话 |
 | GET | `/api/symptoms` | 症状分类 |
+| GET | `/health` | 健康检查（数据库/连接池/LangGraph/缓存） |
 
 ## 对话流程
 

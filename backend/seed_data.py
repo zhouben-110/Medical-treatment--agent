@@ -1,7 +1,7 @@
 """症状分类初始数据"""
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
-from app.schemas import SymptomCategory, Symptom
+from app.models import SymptomCategory, Symptom
 
 SYMPTOM_DATA = {
     "头部": ["头痛", "头晕", "耳鸣", "视力模糊", "鼻塞", "流涕"],

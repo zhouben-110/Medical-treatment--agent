@@ -1,15 +1,8 @@
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
-from app.config import get_settings
+from app.llm import get_llm
 
-settings = get_settings()
-llm = ChatOpenAI(
-    api_key=settings.llm_api_key,
-    model=settings.llm_model,
-    base_url=settings.llm_base_url,
-    temperature=0
-)
+llm = get_llm(temperature=0)
 
 SYMPTOM_ANALYSIS_PROMPT = """你是一个医疗AI助手。请从用户的描述中提取症状信息。
 

@@ -1,11 +1,20 @@
 import { ChatResponse, ChatStage, Session, StreamMeta, SymptomCategory } from '@/types';
 
 const API_BASE = '/api';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+function getHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (API_KEY) {
+    headers['X-API-Key'] = API_KEY;
+  }
+  return headers;
+}
 
 export async function sendMessage(message: string, sessionId?: string): Promise<ChatResponse> {
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(),
     body: JSON.stringify({ message, session_id: sessionId }),
   });
   return response.json();
@@ -24,7 +33,7 @@ export function sendMessageStream(
 
   fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders(),
     body: JSON.stringify({ message, session_id: sessionId }),
     signal: controller.signal,
   }).then(async (response) => {
@@ -79,7 +88,7 @@ export function sendMessageStream(
           try {
             handleEvent(JSON.parse(line.slice(6)));
           } catch (e) {
-            // ignore parse errors
+            console.debug('SSE parse error:', e, 'line:', line);
           }
         }
       }
@@ -89,7 +98,7 @@ export function sendMessageStream(
       try {
         handleEvent(JSON.parse(buffer.slice(6)));
       } catch (e) {
-        // ignore
+        console.debug('SSE parse error:', e, 'buffer:', buffer);
       }
     }
 
@@ -104,18 +113,19 @@ export function sendMessageStream(
 }
 
 export async function getHistory(): Promise<Session[]> {
-  const response = await fetch(`${API_BASE}/history`);
+  const response = await fetch(`${API_BASE}/history`, { headers: getHeaders() });
   return response.json();
 }
 
 export async function getSessionDetail(sessionId: string) {
-  const response = await fetch(`${API_BASE}/history/${sessionId}`);
+  const response = await fetch(`${API_BASE}/history/${sessionId}`, { headers: getHeaders() });
   return response.json();
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
   const response = await fetch(`${API_BASE}/history/${sessionId}`, {
     method: 'DELETE',
+    headers: getHeaders(),
   });
   if (!response.ok) {
     throw new Error(`删除失败 (${response.status})`);
@@ -123,6 +133,6 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 export async function getSymptoms(): Promise<{ categories: SymptomCategory[] }> {
-  const response = await fetch(`${API_BASE}/symptoms`);
+  const response = await fetch(`${API_BASE}/symptoms`, { headers: getHeaders() });
   return response.json();
 }

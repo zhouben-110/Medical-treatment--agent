@@ -109,4 +109,5 @@ def init_vector_store_sync(settings) -> PGVector:
 
 async def init_vector_store(settings) -> PGVector:
     """初始化 pgvector 向量库（异步接口，内部使用同步）"""
-    return init_vector_store_sync(settings)
+    import asyncio
+    return await asyncio.to_thread(init_vector_store_sync, settings)

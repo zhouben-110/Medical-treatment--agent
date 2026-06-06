@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import List
 
 
 class Settings(BaseSettings):
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     data_dir: str = "./data"
+    api_key: str = ""
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
+    sql_echo: bool = False
 
     class Config:
         env_file = ".env"

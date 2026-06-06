@@ -1,56 +1,45 @@
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey, func
-from sqlalchemy.orm import relationship
-from app.database import Base
-import uuid
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+from uuid import UUID
 
 
-def generate_id():
-    return str(uuid.uuid4())
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
+    session_id: Optional[UUID] = Field(None, description="会话ID")
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String, primary_key=True, default=generate_id)
-    created_at = Column(DateTime, server_default=func.now())
-    sessions = relationship("Session", back_populates="user")
-
-
-class Session(Base):
-    __tablename__ = "sessions"
-
-    id = Column(String, primary_key=True, default=generate_id)
-    user_id = Column(String, ForeignKey("users.id"))
-    title = Column(String)
-    created_at = Column(DateTime, server_default=func.now())
-    diagnosis = Column(Text, nullable=True)
-    user = relationship("User", back_populates="sessions")
-    messages = relationship("Message", back_populates="session", order_by="Message.timestamp")
+class ChatResponse(BaseModel):
+    reply: str
+    stage: str
+    symptoms: List[str]
+    session_id: str
+    need_more_info: bool = False
+    possible_diseases: List[str] = []
 
 
-class Message(Base):
-    __tablename__ = "messages"
-
-    id = Column(String, primary_key=True, default=generate_id)
-    session_id = Column(String, ForeignKey("sessions.id"))
-    role = Column(String)  # 'user' or 'assistant'
-    content = Column(Text)
-    timestamp = Column(DateTime, server_default=func.now())
-    session = relationship("Session", back_populates="messages")
+class MessageResponse(BaseModel):
+    role: str
+    content: str
+    timestamp: datetime
 
 
-class SymptomCategory(Base):
-    __tablename__ = "symptom_categories"
+class SessionResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    message_count: int
 
-    id = Column(String, primary_key=True, default=generate_id)
-    name = Column(String, unique=True)
-    symptoms = relationship("Symptom", back_populates="category")
+
+class SessionDetailResponse(BaseModel):
+    messages: List[MessageResponse]
+    diagnosis: Optional[str]
 
 
-class Symptom(Base):
-    __tablename__ = "symptoms"
+class SymptomCategoryResponse(BaseModel):
+    name: str
+    symptoms: List[str]
 
-    id = Column(String, primary_key=True, default=generate_id)
-    category_id = Column(String, ForeignKey("symptom_categories.id"))
-    name = Column(String)
-    category = relationship("SymptomCategory", back_populates="symptoms")
+
+class SymptomListResponse(BaseModel):
+    categories: List[SymptomCategoryResponse]

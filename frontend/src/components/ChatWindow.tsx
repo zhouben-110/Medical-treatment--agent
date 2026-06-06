@@ -1,137 +1,49 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { ChatStage, Message, Session } from '@/types';
-import { sendMessageStream, getHistory, getSessionDetail, deleteSession } from '@/api/client';
+import { useState } from 'react';
+import { useChat } from '@/hooks/useChat';
+import { useSession } from '@/hooks/useSession';
 import MessageBubble from './MessageBubble';
 import SymptomTags from './SymptomTags';
 import Sidebar from './Sidebar';
 
 export default function ChatWindow() {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>();
-  const [symptoms, setSymptoms] = useState<string[]>([]);
-  const [needMoreInfo, setNeedMoreInfo] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const {
+    sessions, currentSessionId, setCurrentSessionId,
+    loadHistory, loadSession, deleteSessionById, newSession,
+  } = useSession();
 
-  useEffect(() => {
-    loadHistory();
-  }, []);
+  const {
+    messages, loading, symptoms, needMoreInfo,
+    messagesEndRef, sendMessage, resetChat, loadMessages,
+  } = useChat(currentSessionId, (id) => setCurrentSessionId(id));
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const loadHistory = async () => {
-    const data = await getHistory();
-    setSessions(data);
-  };
-
-  const loadSession = async (sessionId: string) => {
-    const data = await getSessionDetail(sessionId);
-    setMessages(data.messages);
-    setCurrentSessionId(sessionId);
-    setNeedMoreInfo(false);
-  };
-
-  const setLastAssistantStage = (stage: ChatStage) => {
-    setMessages((prev) => {
-      const updated = [...prev];
-      const lastMsg = updated[updated.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        updated[updated.length - 1] = { ...lastMsg, stage };
-      }
-      return updated;
-    });
-  };
-
-  const handleSend = async () => {
-    if (!input.trim() || loading) return;
-
-    const userMessage: Message = { role: 'user', content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    const userMsg = input;
+  const handleSend = () => {
+    if (!input.trim()) return;
+    sendMessage(input);
     setInput('');
-    setLoading(true);
-    setNeedMoreInfo(false);
-
-    const aiMessage: Message = { role: 'assistant', content: '' };
-    setMessages((prev) => [...prev, aiMessage]);
-
-    sendMessageStream(
-      userMsg,
-      currentSessionId,
-      // onChunk
-      (chunk, stage) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastMsg = updated[updated.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant') {
-            updated[updated.length - 1] = {
-              ...lastMsg,
-              content: lastMsg.content + chunk,
-              stage: lastMsg.stage ?? stage,
-            };
-          }
-          return updated;
-        });
-      },
-      // onMeta
-      (meta) => {
-        if (meta.session_id) setCurrentSessionId(meta.session_id);
-        if (meta.symptoms) setSymptoms(meta.symptoms);
-        if (typeof meta.need_more_info === 'boolean') setNeedMoreInfo(meta.need_more_info);
-        if (meta.stage) setLastAssistantStage(meta.stage);
-      },
-      // onStage
-      (stage) => {
-        setLastAssistantStage(stage);
-      },
-      // onDone
-      () => {
-        setLoading(false);
-        loadHistory();
-      },
-      // onError
-      (error) => {
-        console.error('Failed to send message:', error);
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastMsg = updated[updated.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '') {
-            updated[updated.length - 1] = {
-              ...lastMsg,
-              content: `请求失败：${error.message || '无法连接到后端服务'}`,
-            };
-          }
-          return updated;
-        });
-        setLoading(false);
-      }
-    );
   };
 
   const handleNewSession = () => {
-    setMessages([]);
-    setCurrentSessionId(undefined);
-    setSymptoms([]);
-    setNeedMoreInfo(false);
+    newSession();
+    resetChat();
+  };
+
+  const handleSelectSession = async (sessionId: string) => {
+    const msgs = await loadSession(sessionId);
+    loadMessages(msgs);
   };
 
   const handleDeleteSession = async (sessionId: string) => {
     try {
-      await deleteSession(sessionId);
+      await deleteSessionById(sessionId);
+      if (currentSessionId === sessionId) {
+        handleNewSession();
+      }
     } catch (err) {
       console.error('Failed to delete session:', err);
       alert(err instanceof Error ? err.message : '删除失败');
-      return;
-    }
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    if (currentSessionId === sessionId) {
-      handleNewSession();
     }
   };
 
@@ -140,7 +52,7 @@ export default function ChatWindow() {
       <Sidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
-        onSelectSession={loadSession}
+        onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
       />
@@ -152,8 +64,8 @@ export default function ChatWindow() {
               <p>描述您的症状，AI将为您提供初步建议</p>
             </div>
           )}
-          {messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} />
+          {messages.map((msg) => (
+            <MessageBubble key={msg.id} message={msg} />
           ))}
           {symptoms.length > 0 && <SymptomTags symptoms={symptoms} />}
           {loading && (
@@ -171,12 +83,18 @@ export default function ChatWindow() {
         </div>
         <div className="p-4 border-t">
           <div className="flex gap-2">
-            <input
+            <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-              className="flex-1 p-2 border rounded focus:outline-none focus:border-blue-500"
-              placeholder={needMoreInfo ? '请回答上面的追问...' : '描述您的症状...'}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              rows={2}
+              className="flex-1 p-2 border rounded focus:outline-none focus:border-blue-500 resize-none"
+              placeholder={needMoreInfo ? '请回答上面的追问...' : '描述您的症状...（Shift+Enter 换行）'}
               disabled={loading}
             />
             <button

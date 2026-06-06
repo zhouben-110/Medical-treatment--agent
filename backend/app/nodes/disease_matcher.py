@@ -1,18 +1,27 @@
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel, Field
+from typing import List
 from app.state import MedicalAgentState
-from app.config import get_settings
+from app.llm import get_llm
+from app.cache import get_cached_diagnosis, cache_diagnosis
+import json
 
-settings = get_settings()
-llm = ChatOpenAI(
-    api_key=settings.llm_api_key,
-    model=settings.llm_model,
-    base_url=settings.llm_base_url,
-    temperature=0
-)
+llm = get_llm(temperature=0)
 
 # 由 main.py lifespan 注入
 retriever = None
+
+
+class DiseaseResult(BaseModel):
+    name: str = Field(description="疾病名称")
+    confidence: int = Field(description="置信度 0-100")
+
+
+class DiseaseDiagnosis(BaseModel):
+    diseases: List[DiseaseResult] = Field(description="可能的疾病列表，最多3个")
+    reason: str = Field(description="判断依据")
+
 
 DISEASE_MATCH_PROMPT = """你是一个医疗AI助手。根据症状组合和医学知识库，匹配可能的疾病。
 
@@ -22,23 +31,26 @@ DISEASE_MATCH_PROMPT = """你是一个医疗AI助手。根据症状组合和医�
 医学知识参考:
 {medical_context}
 
-请基于以上医学知识参考，返回:
-1. 可能的疾病列表（最多3个，按可能性排序）
-2. 每个疾病的置信度（0-100）
-3. 简要说明判断依据
+请返回 JSON 格式（严格遵守，不要添加其他内容）:
+{{
+  "diseases": [
+    {{"name": "疾病名", "confidence": 70}},
+    {{"name": "疾病名", "confidence": 20}}
+  ],
+  "reason": "判断依据"
+}}
 
-返回格式（严格遵守）:
-disease1: 疾病名 (置信度%)
-disease2: 疾病名 (置信度%)
-disease3: 疾病名 (置信度%)
-reason: 判断依据"""
+注意: diseases 最多3个，按可能性排序，confidence 为 0-100 的整数。"""
 
 
 async def match_diseases(state: MedicalAgentState) -> dict:
     """匹配可能的疾病"""
-    import re
-
     symptoms = state.get("symptoms", [])
+
+    # 检查缓存
+    cached = get_cached_diagnosis(symptoms)
+    if cached:
+        return cached
 
     # RAG 检索
     medical_context = ""
@@ -69,27 +81,33 @@ async def match_diseases(state: MedicalAgentState) -> dict:
     diseases = []
     confidence = 0.5
 
-    for line in content.split("\n"):
-        if line.startswith("disease"):
-            parts = line.split(":", 1)
-            if len(parts) < 2:
-                continue
-            rest = parts[1].strip()
-            match = re.match(r'(.+?)\s*\((\d+)%?\)', rest)
-            if match:
-                disease_name = match.group(1).strip()
+    try:
+        # 提取 JSON（兼容 markdown code block）
+        json_str = content
+        if "```" in json_str:
+            json_str = json_str.split("```")[1]
+            if json_str.startswith("json"):
+                json_str = json_str[4:]
+        parsed = DiseaseDiagnosis.model_validate_json(json_str.strip())
+        diseases = [d.name for d in parsed.diseases]
+        confidence = parsed.diseases[0].confidence / 100 if parsed.diseases else 0.5
+    except Exception:
+        # fallback: 尝试逐行解析（兼容旧格式）
+        for line in content.split("\n"):
+            if '"name"' in line:
                 try:
-                    confidence = int(match.group(2)) / 100
-                except ValueError:
-                    confidence = 0.5
-            else:
-                disease_name = rest.split("(")[0].strip()
-            if disease_name:
-                diseases.append(disease_name)
+                    import re
+                    name_match = re.search(r'"name"\s*:\s*"([^"]+)"', line)
+                    if name_match:
+                        diseases.append(name_match.group(1))
+                except Exception:
+                    pass
 
-    return {
+    result = {
         "possible_diseases": diseases,
         "confidence": confidence,
         "current_stage": "diagnosing",
         "retrieved_context": medical_context,
     }
+    cache_diagnosis(symptoms, result)
+    return result

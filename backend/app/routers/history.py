@@ -2,34 +2,38 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from app.database import get_db
-from app.models import SessionResponse, SessionDetailResponse, MessageResponse
-from app.schemas import Session, Message
+from app.schemas import SessionResponse, SessionDetailResponse, MessageResponse
+from app.models import Session, Message
 from app import graph as graph_module
+from app.auth import verify_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 
 @router.get("/history", response_model=list[SessionResponse])
 async def get_history(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(Session).order_by(Session.created_at.desc())
-    )
-    sessions = result.scalars().all()
-
-    response = []
-    for session in sessions:
-        msg_count = await db.execute(
-            select(func.count()).where(Message.session_id == session.id)
+        select(
+            Session.id,
+            Session.title,
+            Session.created_at,
+            func.count(Message.id).label("message_count"),
         )
-        count = msg_count.scalar()
-        response.append(SessionResponse(
-            id=session.id,
-            title=session.title,
-            created_at=session.created_at,
-            message_count=count
-        ))
+        .outerjoin(Message, Message.session_id == Session.id)
+        .group_by(Session.id)
+        .order_by(Session.created_at.desc())
+    )
+    rows = result.all()
 
-    return response
+    return [
+        SessionResponse(
+            id=row.id,
+            title=row.title,
+            created_at=row.created_at,
+            message_count=row.message_count,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/history/{session_id}", response_model=SessionDetailResponse)

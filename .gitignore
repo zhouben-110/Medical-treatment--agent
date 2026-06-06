@@ -27,6 +27,9 @@ env/
 *.db-wal
 *.sqlite3
 
+# Vector store
+backend/chroma_db/
+
 # OS
 .DS_Store
 Thumbs.db
