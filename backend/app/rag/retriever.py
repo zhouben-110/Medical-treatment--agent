@@ -1,78 +1,95 @@
-"""统一检索接口：结构化数据 + 向量检索"""
+"""Client-side orchestrator: calls atomic MCP tools, assembles medical_context."""
 
-from app.rag.knowledge_base import search_by_symptoms, search_by_disease
+import json
+from app.mcp_client import get_tool
+
+
+def _parse_tool_result(raw) -> list:
+    """Normalize langchain-mcp-adapters output into a list of dict items.
+
+    The adapter returns a list of content blocks — ``[{'type':'text','text':<json>}, ...]`` —
+    one block per item the tool returned, or ``[]`` when there are no results. We also
+    tolerate a raw JSON string or already-parsed data for robustness across versions.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else [parsed]
+    if isinstance(raw, list):
+        items = []
+        for el in raw:
+            if isinstance(el, dict) and el.get("type") == "text" and "text" in el:
+                items.append(json.loads(el["text"]))
+            else:
+                items.append(el)
+        return items
+    return [raw]
 
 
 class MedicalRetriever:
-    """合并结构化知识库和向量检索结果的统一接口"""
+    """Builds prompt context by composing the Medical-KB MCP tools."""
 
-    def __init__(self, vector_store):
-        self.vector_store = vector_store
+    def __init__(self, tools: list):
+        self.tools = tools or []
+
+    async def _call(self, name: str, args: dict) -> list:
+        tool = get_tool(self.tools, name)
+        if tool is None:
+            return []
+        try:
+            raw = await tool.ainvoke(args)
+            return _parse_tool_result(raw)
+        except Exception as e:
+            print(f"[retriever] tool {name} failed: {e}")
+            return []
 
     async def retrieve_for_diagnosis(self, symptoms: list[str]) -> str:
-        """diagnose 节点调用：用症状检索可能的疾病"""
-        parts = []
+        parts: list[str] = []
 
-        # 1. 结构化精确匹配
-        structured = search_by_symptoms(symptoms)
-        if structured:
+        diseases = await self._call("search_diseases_by_symptoms", {"symptoms": symptoms})
+        if diseases:
             lines = ["【知识库匹配结果】"]
-            for i, item in enumerate(structured, 1):
+            for i, d in enumerate(diseases, 1):
                 lines.append(
-                    f"{i}. {item['disease']}（匹配度{item['match_score']*100:.0f}%，"
-                    f"严重程度：{item['severity']}）\n"
-                    f"   匹配症状：{'、'.join(item['matched_symptoms'])}\n"
-                    f"   描述：{item['description']}"
+                    f"{i}. {d['name']}（匹配度{d['match_score']*100:.0f}%，严重程度：{d['severity']}）\n"
+                    f"   匹配症状：{'、'.join(d['matched_symptoms'])}\n"
+                    f"   描述：{d['description']}"
                 )
             parts.append("\n".join(lines))
 
-        # 2. 向量检索补充
         query = "症状：" + "、".join(symptoms) + " 可能的疾病"
-        try:
-            docs = await self.vector_store.ainvoke(query)
-            if docs:
-                lines = ["【医学文献参考】"]
-                for i, doc in enumerate(docs[:3], 1):
-                    text = doc.page_content[:200].replace("\n", " ")
-                    lines.append(f"{i}. {text}...")
-                parts.append("\n".join(lines))
-        except Exception as e:
-            print(f"[RAG] vector retrieve_for_diagnosis failed: {e}")
+        chunks = await self._call("search_guidelines", {"query": query, "k": 3})
+        if chunks:
+            lines = ["【医学文献参考】"]
+            for i, c in enumerate(chunks[:3], 1):
+                lines.append(f"{i}. {c['text'][:200].strip()}...")
+            parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""
 
     async def retrieve_for_advice(self, diseases: list[str], symptoms: list[str]) -> str:
-        """advise 节点调用：按疾病名检索治疗指南
+        parts: list[str] = []
 
-        向量检索合并为单次查询，减少网络往返。
-        """
-        parts = []
-
-        # 1. 结构化查详情
-        for disease_name in diseases[:3]:
-            detail = search_by_disease(disease_name)
+        for name in diseases[:3]:
+            details = await self._call("get_disease_detail", {"name": name})
+            detail = details[0] if details else None
             if detail:
-                lines = [
-                    f"【{detail['disease']}】",
+                parts.append("\n".join([
+                    f"【{detail['name']}】",
                     f"描述：{detail['description']}",
                     f"治疗建议：{detail['treatment']}",
                     f"就医指征：{detail['when_to_see_doctor']}",
                     f"严重程度：{detail['severity']}",
-                ]
-                parts.append("\n".join(lines))
+                ]))
 
-        # 2. 向量检索诊疗指南（合并为单次查询）
         if diseases:
-            merged_query = " ".join(f"{d} 治疗 用药 注意事项" for d in diseases[:2])
-            try:
-                docs = await self.vector_store.ainvoke(merged_query)
-                if docs:
-                    lines = ["【相关医学文献】"]
-                    for i, doc in enumerate(docs[:3], 1):
-                        text = doc.page_content[:300].replace("\n", " ")
-                        lines.append(f"{i}. {text}")
-                    parts.append("\n".join(lines))
-            except Exception as e:
-                print(f"[RAG] vector retrieve_for_advice failed: {e}")
+            merged = " ".join(f"{d} 治疗 用药 注意事项" for d in diseases[:2])
+            chunks = await self._call("search_guidelines", {"query": merged, "k": 3})
+            if chunks:
+                lines = ["【相关医学文献】"]
+                for i, c in enumerate(chunks[:3], 1):
+                    lines.append(f"{i}. {c['text'][:300].strip()}")
+                parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

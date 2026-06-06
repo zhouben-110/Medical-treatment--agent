@@ -20,17 +20,17 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     await init_db()
 
-    from app.rag.vector_store import init_vector_store
+    from app.mcp_client import load_tools
     from app.rag.retriever import MedicalRetriever
     from app.nodes import disease_matcher, advisor
 
     try:
-        vector_store = await init_vector_store(settings)
-        retriever = MedicalRetriever(vector_store.as_retriever(search_kwargs={"k": 3}))
+        tools = await load_tools()
+        retriever = MedicalRetriever(tools)
         disease_matcher.retriever = retriever
         advisor.retriever = retriever
     except Exception as e:
-        print(f"Warning: RAG initialization failed, running without RAG: {e}")
+        print(f"Warning: MCP retriever init failed, running without RAG: {e}")
 
     async with AsyncExitStack() as stack:
         conn_str = settings.database_url.replace("+asyncpg", "")
