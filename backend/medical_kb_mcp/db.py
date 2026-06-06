@@ -75,7 +75,7 @@ async def get_disease_detail(name: str) -> DiseaseDetail | None:
         )).scalars().first()
         if d is None:
             d = (await session.execute(
-                select(Disease).where(Disease.name.contains(name))
+                select(Disease).where(Disease.name.contains(name)).order_by(Disease.name)
             )).scalars().first()
     if d is None:
         return None
