@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "medical-kb": {
+      "command": "python",
+      "args": ["-m", "medical_kb_mcp.server", "stdio"],
+      "cwd": "ABSOLUTE/PATH/TO/backend",
+      "env": {
+        "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/medical_agent",
+        "LLM_API_KEY": "your-dashscope-key",
+        "EMBEDDING_MODEL": "text-embedding-v3"
+      }
+    }
+  }
+}
