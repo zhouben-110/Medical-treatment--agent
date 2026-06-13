@@ -19,7 +19,12 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 NODE_TO_STAGE = {"question": "questioning", "advise": "completed"}
 STREAMING_NODES = set(NODE_TO_STAGE.keys())
-PROGRESS_NODES = {"analyze_symptoms": "analyzing", "match_diseases": "diagnosing"}
+PROGRESS_NODES = {
+    "triage": "triaging",
+    "supervisor": "routing",
+    "analyze_symptoms": "analyzing",
+    "match_diseases": "diagnosing",
+}
 
 
 async def _maybe_summarize_state(cfg: dict):
@@ -68,6 +73,9 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool) -> dict
             "need_more_info": True,
             "session_id": session_id,
             "retrieved_context": "",
+            "is_emergency": False,
+            "red_flags": [],
+            "emergency_message": "",
         }
     return {"messages": [{"role": "user", "content": user_message}]}
 
@@ -77,7 +85,7 @@ async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession) -
     if sid:
         session = await db.get(Session, sid)
         if not session:
-            session = Session(id=request.session_id, title=request.message[:20])
+            session = Session(id=sid, title=request.message[:20])
             db.add(session)
     else:
         session = Session(title=request.message[:20])

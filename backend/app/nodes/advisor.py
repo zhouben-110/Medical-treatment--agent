@@ -2,8 +2,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
 
-llm = get_llm(temperature=0.3)
-
 # 由 main.py lifespan 注入
 retriever = None
 
@@ -39,6 +37,7 @@ async def generate_advice(state: MedicalAgentState) -> dict:
         except Exception as e:
             print(f"RAG retrieval error in advise: {e}")
 
+    llm = get_llm(temperature=0.3)
     prompt = ChatPromptTemplate.from_template(ADVICE_PROMPT)
     chain = prompt | llm
 

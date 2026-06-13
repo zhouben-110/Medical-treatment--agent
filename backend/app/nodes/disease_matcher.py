@@ -1,13 +1,12 @@
+import logging
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 from typing import List
 from app.state import MedicalAgentState
 from app.llm import get_llm
 from app.cache import get_cached_diagnosis, cache_diagnosis
-import json
 
-llm = get_llm(temperature=0)
+logger = logging.getLogger(__name__)
 
 # 由 main.py lifespan 注入
 retriever = None
@@ -31,16 +30,7 @@ DISEASE_MATCH_PROMPT = """你是一个医疗AI助手。根据症状组合和医�
 医学知识参考:
 {medical_context}
 
-请返回 JSON 格式（严格遵守，不要添加其他内容）:
-{{
-  "diseases": [
-    {{"name": "疾病名", "confidence": 70}},
-    {{"name": "疾病名", "confidence": 20}}
-  ],
-  "reason": "判断依据"
-}}
-
-注意: diseases 最多3个，按可能性排序，confidence 为 0-100 的整数。"""
+请分析症状并返回可能的疾病列表，最多3个，按可能性排序，confidence 为 0-100 的整数。"""
 
 
 async def match_diseases(state: MedicalAgentState) -> dict:
@@ -58,10 +48,11 @@ async def match_diseases(state: MedicalAgentState) -> dict:
         try:
             medical_context = await retriever.retrieve_for_diagnosis(symptoms)
         except Exception as e:
-            print(f"RAG retrieval error in diagnose: {e}")
+            logger.warning("RAG retrieval error in diagnose: %s", e)
 
+    llm = get_llm(temperature=0)
     prompt = ChatPromptTemplate.from_template(DISEASE_MATCH_PROMPT)
-    chain = prompt | llm
+    chain = prompt | llm.with_structured_output(DiseaseDiagnosis)
 
     history_msgs = state.get("messages", [])[-5:]
     history_lines = []
@@ -71,37 +62,39 @@ async def match_diseases(state: MedicalAgentState) -> dict:
         history_lines.append(f"{role}: {text}")
     history = "\n".join(history_lines)
 
-    response = await chain.ainvoke({
-        "symptoms": ", ".join(symptoms),
-        "conversation_history": history,
-        "medical_context": medical_context or "（无相关知识库数据）",
-    })
-
-    content = response.content
-    diseases = []
-    confidence = 0.5
-
     try:
-        # 提取 JSON（兼容 markdown code block）
-        json_str = content
-        if "```" in json_str:
-            json_str = json_str.split("```")[1]
-            if json_str.startswith("json"):
-                json_str = json_str[4:]
-        parsed = DiseaseDiagnosis.model_validate_json(json_str.strip())
+        parsed: DiseaseDiagnosis = await chain.ainvoke({
+            "symptoms": ", ".join(symptoms),
+            "conversation_history": history,
+            "medical_context": medical_context or "（无相关知识库数据）",
+        })
         diseases = [d.name for d in parsed.diseases]
         confidence = parsed.diseases[0].confidence / 100 if parsed.diseases else 0.5
-    except Exception:
-        # fallback: 尝试逐行解析（兼容旧格式）
-        for line in content.split("\n"):
-            if '"name"' in line:
-                try:
-                    import re
-                    name_match = re.search(r'"name"\s*:\s*"([^"]+)"', line)
-                    if name_match:
-                        diseases.append(name_match.group(1))
-                except Exception:
-                    pass
+    except Exception as e:
+        logger.warning("structured output failed, falling back to plain LLM: %s", e)
+        # fallback: 不用 structured output，手动解析
+        plain_chain = ChatPromptTemplate.from_template(
+            DISEASE_MATCH_PROMPT + "\n\n请返回 JSON 格式: {{\"diseases\": [{{\"name\": \"疾病名\", \"confidence\": 70}}], \"reason\": \"判断依据\"}}"
+        ) | get_llm(temperature=0)
+        response = await plain_chain.ainvoke({
+            "symptoms": ", ".join(symptoms),
+            "conversation_history": history,
+            "medical_context": medical_context or "（无相关知识库数据）",
+        })
+        try:
+            import json, re
+            json_str = response.content
+            if "```" in json_str:
+                json_str = json_str.split("```")[1]
+                if json_str.startswith("json"):
+                    json_str = json_str[4:]
+            parsed = DiseaseDiagnosis.model_validate_json(json_str.strip())
+            diseases = [d.name for d in parsed.diseases]
+            confidence = parsed.diseases[0].confidence / 100 if parsed.diseases else 0.5
+        except Exception:
+            logger.warning("fallback JSON parsing also failed")
+            diseases = []
+            confidence = 0.5
 
     result = {
         "possible_diseases": diseases,

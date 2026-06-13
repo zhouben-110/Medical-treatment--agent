@@ -1,95 +1,85 @@
-"""Client-side orchestrator: calls atomic MCP tools, assembles medical_context."""
+"""直接调用 medical_kb_mcp 知识层函数，组装医学上下文。"""
 
-import json
-from app.mcp_client import get_tool
+import asyncio
+import logging
 
+from medical_kb_mcp.db import search_diseases_by_symptoms, get_disease_detail
+from medical_kb_mcp.vectors import search_guidelines
 
-def _parse_tool_result(raw) -> list:
-    """Normalize langchain-mcp-adapters output into a list of dict items.
-
-    The adapter returns a list of content blocks — ``[{'type':'text','text':<json>}, ...]`` —
-    one block per item the tool returned, or ``[]`` when there are no results. We also
-    tolerate a raw JSON string or already-parsed data for robustness across versions.
-    """
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else [parsed]
-    if isinstance(raw, list):
-        items = []
-        for el in raw:
-            if isinstance(el, dict) and el.get("type") == "text" and "text" in el:
-                items.append(json.loads(el["text"]))
-            else:
-                items.append(el)
-        return items
-    return [raw]
+logger = logging.getLogger(__name__)
 
 
 class MedicalRetriever:
-    """Builds prompt context by composing the Medical-KB MCP tools."""
-
-    def __init__(self, tools: list):
-        self.tools = tools or []
-
-    async def _call(self, name: str, args: dict) -> list:
-        tool = get_tool(self.tools, name)
-        if tool is None:
-            return []
-        try:
-            raw = await tool.ainvoke(args)
-            return _parse_tool_result(raw)
-        except Exception as e:
-            print(f"[retriever] tool {name} failed: {e}")
-            return []
+    """通过直接函数调用检索医学知识库，组装 prompt context。"""
 
     async def retrieve_for_diagnosis(self, symptoms: list[str]) -> str:
         parts: list[str] = []
+        query = "症状：" + "、".join(symptoms) + " 可能的疾病"
 
-        diseases = await self._call("search_diseases_by_symptoms", {"symptoms": symptoms})
-        if diseases:
+        # 结构化匹配与向量检索并行
+        disease_result, guideline_result = await asyncio.gather(
+            search_diseases_by_symptoms(symptoms),
+            search_guidelines(query, k=3),
+            return_exceptions=True,
+        )
+
+        if isinstance(disease_result, Exception):
+            logger.warning("search_diseases_by_symptoms failed: %s", disease_result)
+        elif disease_result:
             lines = ["【知识库匹配结果】"]
-            for i, d in enumerate(diseases, 1):
+            for i, d in enumerate(disease_result, 1):
                 lines.append(
-                    f"{i}. {d['name']}（匹配度{d['match_score']*100:.0f}%，严重程度：{d['severity']}）\n"
-                    f"   匹配症状：{'、'.join(d['matched_symptoms'])}\n"
-                    f"   描述：{d['description']}"
+                    f"{i}. {d.name}（匹配度{d.match_score*100:.0f}%，严重程度：{d.severity}）\n"
+                    f"   匹配症状：{'、'.join(d.matched_symptoms)}\n"
+                    f"   描述：{d.description}"
                 )
             parts.append("\n".join(lines))
 
-        query = "症状：" + "、".join(symptoms) + " 可能的疾病"
-        chunks = await self._call("search_guidelines", {"query": query, "k": 3})
-        if chunks:
+        if isinstance(guideline_result, Exception):
+            logger.warning("search_guidelines failed: %s", guideline_result)
+        elif guideline_result:
             lines = ["【医学文献参考】"]
-            for i, c in enumerate(chunks[:3], 1):
-                lines.append(f"{i}. {c['text'][:200].strip()}...")
+            for i, c in enumerate(guideline_result[:3], 1):
+                lines.append(f"{i}. {c.text[:200].strip()}...")
             parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""
 
     async def retrieve_for_advice(self, diseases: list[str], symptoms: list[str]) -> str:
         parts: list[str] = []
+        top_diseases = diseases[:3]
 
-        for name in diseases[:3]:
-            details = await self._call("get_disease_detail", {"name": name})
-            detail = details[0] if details else None
-            if detail:
+        # 疾病详情和文献检索并行
+        detail_tasks = [get_disease_detail(name) for name in top_diseases]
+        merged_query = " ".join(f"{d} 治疗 用药 注意事项" for d in top_diseases[:2])
+        guideline_task = search_guidelines(merged_query, k=3) if top_diseases else None
+
+        tasks = detail_tasks + ([guideline_task] if guideline_task else [])
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 处理疾病详情
+        for i, name in enumerate(top_diseases):
+            result = results[i]
+            if isinstance(result, Exception):
+                logger.warning("get_disease_detail(%s) failed: %s", name, result)
+            elif result:
                 parts.append("\n".join([
-                    f"【{detail['name']}】",
-                    f"描述：{detail['description']}",
-                    f"治疗建议：{detail['treatment']}",
-                    f"就医指征：{detail['when_to_see_doctor']}",
-                    f"严重程度：{detail['severity']}",
+                    f"【{result.name}】",
+                    f"描述：{result.description}",
+                    f"治疗建议：{result.treatment}",
+                    f"就医指征：{result.when_to_see_doctor}",
+                    f"严重程度：{result.severity}",
                 ]))
 
-        if diseases:
-            merged = " ".join(f"{d} 治疗 用药 注意事项" for d in diseases[:2])
-            chunks = await self._call("search_guidelines", {"query": merged, "k": 3})
-            if chunks:
+        # 处理文献检索
+        if guideline_task:
+            guideline_result = results[len(top_diseases)]
+            if isinstance(guideline_result, Exception):
+                logger.warning("search_guidelines failed: %s", guideline_result)
+            elif guideline_result:
                 lines = ["【相关医学文献】"]
-                for i, c in enumerate(chunks[:3], 1):
-                    lines.append(f"{i}. {c['text'][:300].strip()}")
+                for i, c in enumerate(guideline_result[:3], 1):
+                    lines.append(f"{i}. {c.text[:300].strip()}")
                 parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

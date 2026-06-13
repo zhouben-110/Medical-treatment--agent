@@ -2,6 +2,15 @@ interface Props {
   symptoms: string[];
 }
 
+function parseSymptom(raw: string): string {
+  try {
+    const obj = JSON.parse(raw);
+    return obj.symptom || raw;
+  } catch {
+    return raw;
+  }
+}
+
 export default function SymptomTags({ symptoms }: Props) {
   if (!symptoms.length) return null;
 
@@ -12,7 +21,7 @@ export default function SymptomTags({ symptoms }: Props) {
           key={index}
           className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm"
         >
-          {symptom}
+          {parseSymptom(symptom)}
         </span>
       ))}
     </div>

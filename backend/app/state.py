@@ -19,3 +19,7 @@ class MedicalAgentState(TypedDict):
     need_more_info: bool
     session_id: str
     retrieved_context: str
+    # ── M2: 分诊/急诊 ──
+    is_emergency: bool
+    red_flags: List[str]
+    emergency_message: str

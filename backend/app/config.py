@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     api_key: str = ""
     cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
     sql_echo: bool = False
-    mcp_server_url: str = "http://localhost:8765/mcp"
 
     class Config:
         env_file = ".env"

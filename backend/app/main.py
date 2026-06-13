@@ -1,3 +1,9 @@
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from contextlib import asynccontextmanager, AsyncExitStack
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,17 +26,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     await init_db()
 
-    from app.mcp_client import load_tools
     from app.rag.retriever import MedicalRetriever
     from app.nodes import disease_matcher, advisor
 
-    try:
-        tools = await load_tools()
-        retriever = MedicalRetriever(tools)
-        disease_matcher.retriever = retriever
-        advisor.retriever = retriever
-    except Exception as e:
-        print(f"Warning: MCP retriever init failed, running without RAG: {e}")
+    retriever = MedicalRetriever()
+    disease_matcher.retriever = retriever
+    advisor.retriever = retriever
 
     async with AsyncExitStack() as stack:
         conn_str = settings.database_url.replace("+asyncpg", "")

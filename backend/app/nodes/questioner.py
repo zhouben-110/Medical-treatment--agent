@@ -2,8 +2,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
 
-llm = get_llm(temperature=0.3)
-
 QUESTION_PROMPT = """你是一个医疗AI助手。根据已知症状，生成追问问题。
 
 已知症状: {symptoms}
@@ -20,6 +18,7 @@ QUESTION_PROMPT = """你是一个医疗AI助手。根据已知症状，生成追
 
 async def generate_question(state: MedicalAgentState) -> dict:
     """生成追问问题"""
+    llm = get_llm(temperature=0.3)
     prompt = ChatPromptTemplate.from_template(QUESTION_PROMPT)
     chain = prompt | llm
 

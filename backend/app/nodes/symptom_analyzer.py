@@ -1,8 +1,16 @@
+from typing import Literal
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
 from app.state import MedicalAgentState
 from app.llm import get_llm
 
-llm = get_llm(temperature=0)
+
+class SymptomExtraction(BaseModel):
+    """症状提取结构化输出"""
+    symptoms: list[str] = Field(description="从用户描述中识别的症状列表")
+    severity: Literal["轻度", "中度", "重度"] = Field(description="症状整体严重程度")
+    need_more_info: bool = Field(description="是否需要更多信息才能初步判断")
+
 
 SYMPTOM_ANALYSIS_PROMPT = """你是一个医疗AI助手。请从用户的描述中提取症状信息。
 
@@ -10,15 +18,7 @@ SYMPTOM_ANALYSIS_PROMPT = """你是一个医疗AI助手。请从用户的描述�
 
 已识别的症状: {existing_symptoms}
 
-请返回:
-1. 新识别的症状列表（用逗号分隔）
-2. 症状的严重程度（轻度/中度/重度）
-3. 是否需要更多信息才能初步判断
-
-返回格式（严格遵守）:
-symptoms: 症状1, 症状2, ...
-severity: 轻度/中度/重度
-need_more_info: true/false"""
+请提取新识别的症状，评估严重程度，并判断是否需要更多信息。"""
 
 
 def _extract_latest_user_message(messages) -> str:
@@ -29,35 +29,25 @@ def _extract_latest_user_message(messages) -> str:
     return ""
 
 
-def _grab_line(content: str, prefix: str) -> str | None:
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.lower().startswith(prefix.lower()):
-            return stripped.split(":", 1)[1].strip() if ":" in stripped else ""
-    return None
-
-
 async def analyze_symptoms(state: MedicalAgentState) -> dict:
-    """从用户消息中提取症状"""
+    """从用户消息中提取症状（Pydantic 结构化输出）"""
     user_message = _extract_latest_user_message(state.get("messages", []))
 
+    llm = get_llm(temperature=0)
+    structured_llm = llm.with_structured_output(SymptomExtraction)
     prompt = ChatPromptTemplate.from_template(SYMPTOM_ANALYSIS_PROMPT)
-    chain = prompt | llm
+    chain = prompt | structured_llm
 
-    response = await chain.ainvoke({
-        "user_message": user_message,
-        "existing_symptoms": ", ".join(state.get("symptoms", []))
-    })
-    content = response.content
-
-    symptoms_str = _grab_line(content, "symptoms") or _grab_line(content, "症状")
-    new_symptoms = [s.strip() for s in (symptoms_str or "").split(",") if s.strip()]
-
-    need_more_str = _grab_line(content, "need_more_info")
-    if need_more_str is None:
-        need_more = state.get("need_more_info", True)
-    else:
-        need_more = "true" in need_more_str.lower()
+    try:
+        result = await chain.ainvoke({
+            "user_message": user_message,
+            "existing_symptoms": ", ".join(state.get("symptoms", [])) or "（无）",
+        })
+        new_symptoms = result.symptoms
+        need_more = result.need_more_info
+    except Exception:
+        # 结构化输出失败时保留已有状态
+        return {"current_stage": "analyzing"}
 
     # 保持顺序去重
     all_symptoms = list(dict.fromkeys((state.get("symptoms") or []) + new_symptoms))
@@ -65,5 +55,5 @@ async def analyze_symptoms(state: MedicalAgentState) -> dict:
     return {
         "symptoms": all_symptoms,
         "need_more_info": need_more,
-        "current_stage": "analyzing"
+        "current_stage": "analyzing",
     }

@@ -19,5 +19,5 @@ httpx>=0.28.1
 langchain-postgres>=0.0.17
 slowapi>=0.1.9
 mcp>=1.9.0
-langchain-mcp-adapters>=0.1.0
+langgraph-supervisor>=0.0.31
 dashscope>=1.20.0
