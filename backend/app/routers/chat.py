@@ -17,25 +17,14 @@ limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
-NODE_TO_STAGE = {"question": "questioning", "advise": "completed"}
-STREAMING_NODES = set(NODE_TO_STAGE.keys())
-PROGRESS_NODES = {
-    "triage": "triaging",
-    "supervisor": "routing",
-    "analyze_symptoms": "analyzing",
-    "match_diseases": "diagnosing",
-}
-
 
 async def _maybe_summarize_state(cfg: dict):
-    """检查图状态中的消息数量，超过阈值则摘要早期消息"""
     st = await graph_module.medical_graph.aget_state(cfg)
     values = st.values or {}
     messages = values.get("messages", [])
     if len(messages) <= 12:
         return
 
-    # 提取消息为 dict 列表
     msg_dicts = []
     for m in messages:
         role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None)
@@ -47,7 +36,6 @@ async def _maybe_summarize_state(cfg: dict):
 
     summarized = await maybe_summarize_messages(msg_dicts)
     if summarized is not msg_dicts:
-        # 更新图状态中的消息
         graph_module.medical_graph.update_state(cfg, {"messages": summarized})
 
 
@@ -117,12 +105,12 @@ async def chat(request: Request, body: ChatRequest, db: AsyncSession = Depends(g
     ai_reply = (
         getattr(last_msg, "content", None)
         or (last_msg.get("content") if isinstance(last_msg, dict) else None)
-        or "抱歉，我无法处理您的请求。"
+        or "Sorry, I could not process your request."
     )
 
     stage = result.get("current_stage", "unknown")
     symptoms = result.get("symptoms", []) or []
-    diseases = result.get("possible_diseases", []) or []
+    diseases = result.get("possible_diseases") or []
     need_more = bool(result.get("need_more_info", False))
 
     diagnosis = diseases[0] if (stage == "completed" and diseases) else None
@@ -158,69 +146,51 @@ async def chat_stream(request: Request, body: ChatRequest, db: AsyncSession = De
         raise
 
     async def generate():
-        full_text_by_node: dict[str, str] = {}
-        current_stage_emitted: str | None = None
-
         try:
             yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
-            async for ev in graph_module.medical_graph.astream_events(
-                graph_input, config=cfg, version="v2"
-            ):
-                ev_event = ev.get("event")
-                node = (ev.get("metadata") or {}).get("langgraph_node")
+            result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)
 
-                # 进度事件：analyze/diagnose 节点开始时通知前端
-                if ev_event == "on_chain_start" and node in PROGRESS_NODES:
-                    stage = PROGRESS_NODES[node]
-                    if current_stage_emitted != stage:
-                        yield f"data: {json.dumps({'type': 'stage', 'stage': stage}, ensure_ascii=False)}\n\n"
-                        current_stage_emitted = stage
-                    continue
+            stage = result.get("current_stage", "unknown")
+            if stage == "completed":
+                yield f"data: {json.dumps({'type': 'stage', 'stage': 'completed'}, ensure_ascii=False)}\n\n"
+            elif stage == "emergency":
+                yield f"data: {json.dumps({'type': 'stage', 'stage': 'emergency'}, ensure_ascii=False)}\n\n"
+            elif stage == "questioning":
+                yield f"data: {json.dumps({'type': 'stage', 'stage': 'questioning'}, ensure_ascii=False)}\n\n"
 
-                if ev_event != "on_chat_model_stream":
-                    continue
-                if node not in STREAMING_NODES:
-                    continue
+            last_msg = result["messages"][-1] if result.get("messages") else None
+            ai_text = (
+                getattr(last_msg, "content", None)
+                or (last_msg.get("content") if isinstance(last_msg, dict) else None)
+                or ""
+            )
+            if ai_text:
+                chunk_size = 20
+                for i in range(0, len(ai_text), chunk_size):
+                    chunk = ai_text[i:i + chunk_size]
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk, 'stage': stage}, ensure_ascii=False)}\n\n"
 
-                chunk_obj = ev.get("data", {}).get("chunk")
-                chunk = getattr(chunk_obj, "content", "") if chunk_obj is not None else ""
-                if not chunk:
-                    continue
-
-                full_text_by_node.setdefault(node, "")
-                full_text_by_node[node] += chunk
-
-                stage = NODE_TO_STAGE[node]
-                if current_stage_emitted != stage:
-                    yield f"data: {json.dumps({'type': 'stage', 'stage': stage}, ensure_ascii=False)}\n\n"
-                    current_stage_emitted = stage
-
-                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk, 'stage': stage}, ensure_ascii=False)}\n\n"
-
-            final_st = await graph_module.medical_graph.aget_state(cfg)
-            v = final_st.values or {}
+            symptoms = result.get("symptoms", []) or []
+            diseases = result.get("possible_diseases") or []
+            need_more = bool(result.get("need_more_info", False))
             final_meta = {
                 "type": "meta",
                 "session_id": session_id,
-                "symptoms": v.get("symptoms", []) or [],
-                "stage": v.get("current_stage", "unknown"),
-                "need_more_info": bool(v.get("need_more_info", False)),
-                "possible_diseases": v.get("possible_diseases", []) or [],
+                "symptoms": symptoms,
+                "stage": stage,
+                "need_more_info": need_more,
+                "possible_diseases": diseases,
             }
             yield f"data: {json.dumps(final_meta, ensure_ascii=False)}\n\n"
 
-            assistant_text = full_text_by_node.get("advise") or full_text_by_node.get("question") or ""
-            diagnosis = None
-            if "advise" in full_text_by_node:
-                diseases = v.get("possible_diseases") or []
-                diagnosis = diseases[0] if diseases else None
-            if assistant_text:
-                await _persist_assistant_msg(session_id, assistant_text, diagnosis)
+            diagnosis = diseases[0] if (stage == "completed" and diseases) else None
+            if ai_text:
+                await _persist_assistant_msg(session_id, ai_text, diagnosis)
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"Error in chat_stream generator: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': '服务器内部错误，请稍后重试'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': 'Server error'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

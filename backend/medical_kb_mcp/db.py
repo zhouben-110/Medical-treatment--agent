@@ -1,12 +1,17 @@
-"""Postgres-backed disease queries (Dice scoring over text[] + GIN)."""
+"""Postgres-backed disease queries (embedding cosine similarity via pgvector)."""
 
+import logging
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from medical_kb_mcp.config import get_mcp_settings
 from medical_kb_mcp.models import Disease
 
+logger = logging.getLogger(__name__)
+
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
+
+SIMILARITY_THRESHOLD = 0.3  # cosine 相似度低于此值的结果不返回
 
 
 class DiseaseMatch(BaseModel):
@@ -44,28 +49,41 @@ async def search_diseases_by_symptoms(symptoms: list[str], limit: int = 5) -> li
     cleaned = [s.strip() for s in symptoms if s and s.strip()]
     if not cleaned:
         return []
+
+    from medical_kb_mcp.vectors import embed_query
+
+    query_text = "、".join(cleaned)
+    query_embedding = await embed_query(query_text)
     user_set = set(cleaned)
 
     async with _get_sessionmaker()() as session:
-        stmt = select(Disease).where(Disease.symptoms.overlap(cleaned))
-        rows = (await session.execute(stmt)).scalars().all()
+        # 只查有 embedding 的疾病，按 cosine 距离排序
+        distance = Disease.symptom_embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(Disease, distance.label("dist"))
+            .where(Disease.symptom_embedding.isnot(None))
+            .order_by(distance)
+            .limit(limit)
+        )
+        rows = (await session.execute(stmt)).all()
 
     matches: list[DiseaseMatch] = []
-    for d in rows:
+    for d, dist in rows:
+        similarity = 1 - dist
+        if similarity < SIMILARITY_THRESHOLD:
+            continue
+        # 保留交集信息作为辅助参考
         dset = set(d.symptoms)
         inter = user_set & dset
-        if not inter:
-            continue
-        score = 2 * len(inter) / (len(dset) + len(user_set))
         matches.append(DiseaseMatch(
             name=d.name,
             matched_symptoms=sorted(inter),
-            match_score=round(score, 2),
+            match_score=round(similarity, 2),
             severity=d.severity,
             description=d.description,
         ))
-    matches.sort(key=lambda m: (-m.match_score, -len(m.matched_symptoms)))
-    return matches[:limit]
+
+    return matches
 
 
 async def get_disease_detail(name: str) -> DiseaseDetail | None:

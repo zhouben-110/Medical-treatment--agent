@@ -1,10 +1,13 @@
 """Seed the diseases table from the curated knowledge list (idempotent)."""
 
 import asyncio
+import logging
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from medical_kb_mcp.config import get_mcp_settings
 from medical_kb_mcp.models import Disease
+
+logger = logging.getLogger(__name__)
 
 # --- DISEASE_KNOWLEDGE: all 25 entries copied VERBATIM from
 #     backend/app/rag/knowledge_base.py ---
@@ -212,29 +215,65 @@ DISEASE_KNOWLEDGE = [
 ]
 
 
-async def seed(sessionmaker=None) -> int:
+async def ensure_embedding_column(sessionmaker=None) -> None:
+    """确保 diseases 表存在 symptom_embedding 列（幂等）。"""
     if sessionmaker is None:
         engine = create_async_engine(get_mcp_settings().database_url)
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
-    inserted = 0
     async with sessionmaker() as session:
-        for entry in DISEASE_KNOWLEDGE:
-            exists = (await session.execute(
-                select(func.count()).select_from(Disease).where(Disease.name == entry["disease"])
-            )).scalar_one()
-            if exists:
-                continue
-            session.add(Disease(
-                name=entry["disease"],
-                symptoms=entry["symptoms"],
-                description=entry["description"],
-                treatment=entry["treatment"],
-                when_to_see_doctor=entry["when_to_see_doctor"],
-                severity=entry["severity"],
-            ))
-            inserted += 1
+        from sqlalchemy import text
+        await session.execute(text(
+            "ALTER TABLE diseases ADD COLUMN IF NOT EXISTS symptom_embedding vector(1024)"
+        ))
         await session.commit()
+    logger.info("Ensured symptom_embedding column exists.")
+
+
+async def seed(sessionmaker=None) -> int:
+    from medical_kb_mcp.vectors import embed_texts
+
+    if sessionmaker is None:
+        engine = create_async_engine(get_mcp_settings().database_url)
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    # 先确保列存在
+    await ensure_embedding_column(sessionmaker)
+
+    inserted = 0
+    backfilled = 0
+
+    # 预计算所有疾病的 embedding
+    symptom_texts = ["、".join(e["symptoms"]) for e in DISEASE_KNOWLEDGE]
+    embeddings = await embed_texts(symptom_texts)
+
+    async with sessionmaker() as session:
+        for entry, embedding in zip(DISEASE_KNOWLEDGE, embeddings):
+            disease = (await session.execute(
+                select(Disease).where(Disease.name == entry["disease"])
+            )).scalars().first()
+
+            if disease is None:
+                # 新疾病：插入
+                session.add(Disease(
+                    name=entry["disease"],
+                    symptoms=entry["symptoms"],
+                    symptom_embedding=embedding,
+                    description=entry["description"],
+                    treatment=entry["treatment"],
+                    when_to_see_doctor=entry["when_to_see_doctor"],
+                    severity=entry["severity"],
+                ))
+                inserted += 1
+            elif disease.symptom_embedding is None:
+                # 已有疾病但缺少 embedding：补算
+                disease.symptom_embedding = embedding
+                backfilled += 1
+
+        await session.commit()
+
+    if backfilled:
+        logger.info("Backfilled embeddings for %d existing diseases.", backfilled)
     return inserted
 
 

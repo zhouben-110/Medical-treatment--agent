@@ -2,7 +2,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
-from app.nodes import analyze_symptoms, generate_question, match_diseases, generate_advice
+from app.nodes import analyze_symptoms, generate_question
+from app.nodes.diagnose_and_advise import diagnose_and_advise
 from app.nodes.triage import run_triage, _check_red_flags, EMERGENCY_RESPONSE
 from app.llm import get_llm
 
@@ -32,20 +33,21 @@ SUPERVISOR_PROMPT = """你是一个医疗多 Agent 系统的调度器。根据�
 1. 如果 current_stage 为 "start" → 调用 triage（分诊）
 2. 如果 current_stage 为 "triaged" → 调用 analyze（症状分析）
 3. 如果 current_stage 为 "analyzing" 且 need_more_info 为 true 且轮次未满 → 调用 question（追问）
-4. 如果 current_stage 为 "analyzing" 且 (need_more_info 为 false 或轮次已满) → 调用 diagnose（诊断）
-5. 如果 current_stage 为 "questioning" → 调用 diagnose（诊断）
-6. 如果 current_stage 为 "diagnosing" → 调用 advise（建议）
-7. 如果 current_stage 为 "completed" 或 "emergency" → 结束
+4. 如果 current_stage 为 "analyzing" 且 (need_more_info 为 false 或轮次已满) → 调用 diagnose（诊断+建议）
+5. 如果 current_stage 为 "questioning" → 调用 diagnose（诊断+建议）
+6. 如果 current_stage 为 "completed" 或 "emergency" → 结束
 
-只回复一个 Agent 名称: triage, analyze, question, diagnose, advise, 或 finish"""
+只回复一个 Agent 名称: triage, analyze, question, diagnose, 或 finish"""
 
-VALID_ROUTES = {"triage", "analyze", "question", "diagnose", "advise", "finish"}
+VALID_ROUTES = {"triage", "analyze", "question", "diagnose", "finish"}
 
 
 async def supervisor_node(state: MedicalAgentState) -> dict:
-    """Supervisor 节点：LLM 决定路由目标"""
-    # 红旗快速通道：跳过 LLM 路由，直接短路到 triage 的急诊分支
-    if state.get("current_stage", "start") == "start":
+    """Supervisor 节点：决定路由目标（优先确定性路由，仅 analyzing 阶段用 LLM）"""
+    stage = state.get("current_stage", "start")
+
+    # 红旗快速通道
+    if stage == "start":
         last_user = ""
         for m in reversed(state.get("messages", []) or []):
             role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else None)
@@ -57,24 +59,31 @@ async def supervisor_node(state: MedicalAgentState) -> dict:
                     "emergency_message": EMERGENCY_RESPONSE,
                     "messages": [{"role": "assistant", "content": EMERGENCY_RESPONSE}]}
 
-    llm = get_llm(temperature=0)
-    prompt = ChatPromptTemplate.from_template(SUPERVISOR_PROMPT)
-    chain = prompt | llm
-
-    response = await chain.ainvoke({
-        "current_stage": state.get("current_stage", "start"),
-        "symptoms": ", ".join(state.get("symptoms", [])) or "（无）",
-        "is_emergency": "是" if state.get("is_emergency") else "否",
-        "need_more_info": "是" if state.get("need_more_info", True) else "否",
-        "user_turns": _count_user_turns(state.get("messages", [])),
-        "max_turns": MAX_USER_TURNS,
-    })
-
-    route = response.content.strip().lower()
-    if route not in VALID_ROUTES:
-        # LLM 返回了无效路由，用确定性逻辑兜底
+    # 确定性路由：大部分阶段不需要 LLM
+    if stage in ("start", "triaged", "questioning"):
         route = _deterministic_route(state)
+        return {"current_stage": f"supervisor:{route}"}
 
+    if stage == "analyzing":
+        # 仅在 analyzing 阶段需要 LLM 判断是否追问
+        llm = get_llm(temperature=0)
+        prompt = ChatPromptTemplate.from_template(SUPERVISOR_PROMPT)
+        chain = prompt | llm
+        response = await chain.ainvoke({
+            "current_stage": stage,
+            "symptoms": ", ".join(state.get("symptoms", [])) or "（无）",
+            "is_emergency": "是" if state.get("is_emergency") else "否",
+            "need_more_info": "是" if state.get("need_more_info", True) else "否",
+            "user_turns": _count_user_turns(state.get("messages", [])),
+            "max_turns": MAX_USER_TURNS,
+        })
+        route = response.content.strip().lower()
+        if route not in VALID_ROUTES:
+            route = _deterministic_route(state)
+        return {"current_stage": f"supervisor:{route}"}
+
+    # 其他阶段用确定性路由
+    route = _deterministic_route(state)
     return {"current_stage": f"supervisor:{route}"}
 
 
@@ -99,7 +108,7 @@ def _deterministic_route(state: MedicalAgentState) -> str:
     if stage == "questioning":
         return "diagnose"
     if stage == "diagnosing":
-        return "advise"
+        return "diagnose"
     return "finish"
 
 
@@ -137,8 +146,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("triage", run_triage)
     workflow.add_node("analyze", analyze_symptoms)
     workflow.add_node("question", generate_question)
-    workflow.add_node("diagnose", match_diseases)
-    workflow.add_node("advise", generate_advice)
+    workflow.add_node("diagnose", diagnose_and_advise)
 
     # 入口 → supervisor
     workflow.set_entry_point("supervisor")
@@ -152,7 +160,6 @@ def build_graph() -> StateGraph:
             "analyze": "analyze",
             "question": "question",
             "diagnose": "diagnose",
-            "advise": "advise",
             "finish": END,
         },
     )
@@ -165,8 +172,7 @@ def build_graph() -> StateGraph:
     )
     workflow.add_edge("analyze", "supervisor")  # 分析完回 supervisor 决策
     workflow.add_edge("question", END)          # 追问直接结束（等下一轮用户输入）
-    workflow.add_edge("diagnose", "advise")     # 诊断完直接进建议
-    workflow.add_edge("advise", END)            # 建议完结束
+    workflow.add_edge("diagnose", END)          # 诊断+建议完直接结束
 
     return workflow
 

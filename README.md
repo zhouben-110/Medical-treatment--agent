@@ -1,6 +1,6 @@
 # 医疗健康助手
 
-AI 驱动的多 Agent 症状分析与治疗建议系统。基于 LangGraph Supervisor 模式实现多 Agent 协作，MCP 协议解耦知识层，Pydantic 结构化输出保证数据质量。
+AI 驱动的多 Agent 症状分析与治疗建议系统。基于 LangGraph Supervisor 模式实现多 Agent 协作，MCP 协议解耦知识层，Pydantic 结构化输出保证数据质量。疾病匹配使用 pgvector 语义相似度（DashScope embedding），支持同义词/近义词症状识别。
 
 ## 技术栈
 
@@ -57,7 +57,7 @@ cd backend
 pip install -r requirements.txt
 cp .env.example .env   # 编辑 .env 填入 DashScope API Key
 alembic upgrade head   # 创建数据库表
-python -m medical_kb_mcp.seed_diseases   # 灌入 25 种疾病数据（幂等）
+python -m medical_kb_mcp.seed_diseases   # 灌入 25 种疾病数据 + 自动生成 embedding（幂等）
 ```
 
 > **关于指南向量库**：`search_guidelines` 读取**已存在**的 `medical_guidelines` 向量集合。全新空库下该集合为空，指南检索会**优雅降级为空结果**（结构化疾病检索不受影响）。重新 ingest `data/guidelines/*.md` 是 M1 之后的跟进项，详见 [`backend/medical_kb_mcp/README.md`](backend/medical_kb_mcp/README.md)。
@@ -136,7 +136,8 @@ backend/
 │   │   ├── symptom_analyzer.py # 症状提取（Pydantic 结构化输出）
 │   │   ├── questioner.py       # 追问 Agent
 │   │   ├── disease_matcher.py  # 疾病匹配（结构化 JSON + 缓存）
-│   │   └── advisor.py          # 治疗建议 Agent
+│   │   ├── advisor.py          # 治疗建议 Agent
+│   │   └── diagnose_and_advise.py # 诊断+建议合并节点
 │   ├── rag/                # RAG 检索（直接调用知识层函数）
 │   │   └── retriever.py        # 调 medical_kb_mcp → 拼 context
 │   └── routers/            # API 路由
@@ -145,11 +146,12 @@ backend/
 │       └── symptoms.py     # 症状列表
 ├── medical_kb_mcp/         # 独立 MCP Server（可独立部署）
 │   ├── server.py           # FastMCP 应用 + 3 个原子工具
-│   ├── db.py               # Postgres 疾病表访问（Dice 匹配）
+│   ├── db.py               # Postgres 疾病表访问（embedding 语义匹配）
 │   ├── vectors.py          # pgvector + DashScope 嵌入
 │   ├── models.py           # Disease ORM 模型
 │   ├── config.py           # MCPSettings（读同一 .env）
 │   └── seed_diseases.py    # 25 种疾病种子数据
+├── start.py                # 启动脚本（单进程启动 FastAPI）
 ├── evals/                  # Eval 工具
 │   ├── dataset.py          # 35 个 eval case（25 正常 + 5 急诊 + 5 模糊）
 │   ├── runner.py           # eval 执行引擎（mock / real 两种模式）
@@ -175,22 +177,110 @@ frontend/
 
 系统采用 **Supervisor 多 Agent 模式**，每个 Agent 有明确职责：
 
+### 系统工作流程图
+
+```mermaid
+flowchart TD
+    User([用户输入症状]) --> FE[前端 ChatWindow]
+    FE -->|POST /api/chat/stream| API[FastAPI chat.py]
+
+    API --> EnsureSession[创建/恢复会话 + 记录消息]
+    EnsureSession --> BuildInput[构建 LangGraph 状态]
+    BuildInput --> Graph[LangGraph StateGraph]
+
+    subgraph LangGraph["LangGraph 状态机"]
+        Supervisor{{"Supervisor (入口)"}}
+        Triage["Triage 分诊"]
+        Analyze["Analyze 症状提取"]
+        Question["Question 追问"]
+        Diagnose["Diagnose 诊断+建议"]
+
+        Supervisor -->|"stage=start"| Triage
+        Supervisor -->|"stage=triaged"| Analyze
+        Supervisor -->|"stage=analyzing: LLM决策"| NeedInfo{需要更多信息?}
+        NeedInfo -->|"是 & turns < 5"| Question
+        NeedInfo -->|"否 | turns ≥ 5"| Diagnose
+        Supervisor -->|"stage=questioning"| Diagnose
+
+        Triage -->|"紧急"| Emergency([急救提示: 拨打120])
+        Triage -->|"正常: stage=triaged"| Supervisor
+        Analyze -->|"stage=analyzing"| Supervisor
+        Question -->|"stage=questioning"| WaitUser([等待用户回复...])
+        WaitUser -->|"用户回复"| Supervisor
+        Diagnose -->|"stage=completed"| Result([输出诊断结果])
+    end
+
+    subgraph TriageDetail["Triage 分诊逻辑"]
+        T1["Layer 1: 红旗关键词匹配<br/>29个危险信号 (零延迟)"]
+        T2["Layer 2: LLM TriageResult<br/>结构化输出"]
+        T1 -->|命中| Emergency
+        T1 -->|未命中| T2
+        T2 -->|紧急| Emergency
+        T2 -->|正常| Continue
+    end
+
+    subgraph DiagnoseDetail["Diagnose 诊断流程"]
+        D1["Step 1: retrieve_for_diagnosis"]
+        D2["Step 2: retrieve_for_advice"]
+        D3["Step 3: LLM 生成诊断报告"]
+        D1 --> D2 --> D3
+    end
+
+    Triage -.-> TriageDetail
+    Diagnose -.-> DiagnoseDetail
+
+    subgraph RAG["RAG 检索 (asyncio.gather 并行)"]
+        MCP1["MCP: search_diseases_by_symptoms<br/>pgvector cosine 语义匹配"]
+        MCP2["MCP: search_guidelines<br/>医学指南向量检索"]
+        MCP3["MCP: get_disease_detail<br/>疾病详情查询"]
+    end
+
+    D1 -->|"并行调用"| MCP1
+    D1 -->|"并行调用"| MCP2
+    D2 -->|"并行调用"| MCP3
+    D2 -->|"并行调用"| MCP2
+
+    MCP1 --> DB[(PostgreSQL + pgvector)]
+    MCP2 --> DB
+    MCP3 --> DB
+
+    Result -->|SSE events| FE
+    Emergency -->|SSE events| FE
 ```
-用户输入 → Supervisor → Triage（分诊）
-                          ├─ 红旗命中 → 急救短路（END）
-                          └─ 正常 → Supervisor → Analyze（症状提取）
-                                      └─ Supervisor → Question（追问）/ Diagnose（诊断）
-                                                        └─ Advise（建议）→ END
+
+### 状态流转说明
+
+```mermaid
+stateDiagram-v2
+    [*] --> start: 新会话
+    start --> triaged: Triage 完成 (正常)
+    start --> emergency: Triage 检出紧急
+    triaged --> analyzing: SymptomAnalyzer 提取症状
+    analyzing --> questioning: 需要更多信息 (turns < 5)
+    analyzing --> completed: 信息充足 / turns ≥ 5
+    questioning --> analyzing: 用户回复后重新分析
+    questioning --> completed: turns ≥ 5 强制诊断
+    completed --> [*]
+    emergency --> [*]
 ```
+
+### 节点职责
 
 | Agent | 职责 | 技术特点 |
 |---|---|---|
-| **Supervisor** | 路由决策 | LLM + 确定性兜底，LangSmith 可见 |
-| **Triage** | 急诊检测 | 确定性红旗关键词（29 个）+ LLM 结构化输出 |
-| **Analyze** | 症状提取 | Pydantic `SymptomExtraction` 结构化输出 |
-| **Question** | 追问 | 最多 5 轮 |
-| **Diagnose** | 疾病匹配 | RAG 检索（直接调用知识层）+ LLM 推理 |
-| **Advise** | 治疗建议 | 知识库 + 医学指南 |
+| **Supervisor** | 路由决策 | 确定性路由（基于 stage）+ LLM 兜底（仅 analyzing 阶段），LangSmith 可见 |
+| **Triage** | 急诊检测 | Layer 1: 确定性红旗关键词（29 个，零延迟）+ Layer 2: LLM `TriageResult` 结构化输出 |
+| **Analyze** | 症状提取 | Pydantic `SymptomExtraction` 结构化输出，自动去重合并已有症状 |
+| **Question** | 追问 | 最多 5 轮，聚焦: 症状持续时间/伴随症状/病史/过敏史 |
+| **Diagnose** | 诊断+建议 | MCP RAG 检索（并行）→ LLM 一次性生成完整报告 |
+
+### 关键设计决策
+
+1. **确定性优先**: Supervisor 在 4/5 个路由点使用确定性判断，仅在 `analyzing` 阶段引入 LLM 决策（是否需要追问），减少延迟和幻觉风险
+2. **双层急诊检测**: Triage 先做零延迟关键词匹配，命中即短路；未命中才调 LLM，兼顾速度和覆盖率
+3. **合并诊断节点**: `diagnose_and_advise` 将疾病匹配和治疗建议合并为单节点单次 LLM 调用，减少延迟
+4. **并行 RAG**: `asyncio.gather` 同时发起疾病匹配和指南检索，最大化吞吐
+5. **状态持久化**: `AsyncPostgresSaver` 实现多轮对话状态持久化，会话可跨服务重启恢复
 
 ## MCP Server（M1）
 
@@ -198,11 +288,45 @@ frontend/
 
 | 工具 | 用途 |
 |---|---|
-| `search_diseases_by_symptoms` | 症状→疾病匹配（Postgres ARRAY + GIN + Dice） |
+| `search_diseases_by_symptoms` | 症状→疾病匹配（pgvector cosine 语义相似度） |
 | `get_disease_detail` | 疾病详情查询 |
 | `search_guidelines` | 医学指南语义检索（pgvector + DashScope） |
 
 App 侧直接调用 `medical_kb_mcp.db` / `vectors` 模块的函数，无需启动独立进程。Claude Desktop 通过 stdio 模式挂载（见下方集成配置）。
+
+### MCP 工具契约
+
+| 工具 | 入参 | 返回 |
+|---|---|---|
+| `search_diseases_by_symptoms` | `symptoms: list[str]`, `limit: int` | `list[DiseaseMatch]`（pgvector cosine 相似度排序） |
+| `get_disease_detail` | `name: str` | `DiseaseDetail \| None` |
+| `search_guidelines` | `query: str`, `k: int` | `list[GuidelineChunk]` |
+
+### 数据流
+
+```
+diagnose 节点 ─┐
+advise 节点  ─┤→ app/rag/retriever.py ─┐  (asyncio.gather 并行)
+              │    (直接函数调用)        ├─► medical_kb_mcp.db    ─► pgvector(diseases 表, cosine 相似度)
+              │                          └─► medical_kb_mcp.vectors ─► pgvector(guidelines 集合)
+Claude Desktop ─(stdio)──► medical_kb_mcp.server ─┘
+```
+
+## RAG 优化：Embedding 语义匹配
+
+M1 的疾病症状匹配使用 PostgreSQL `overlap` + Dice 系数，只做精确字符串匹配。`"头疼"` 和 `"头痛"` 被视为完全不同的症状。
+
+重构后改为 **pgvector cosine 语义相似度**（DashScope `text-embedding-v3`，1024 维）：
+
+| 阶段 | 操作 |
+|---|---|
+| 写入 | `"、".join(疾病症状)` → DashScope embedding → `symptom_embedding` 列 |
+| 查询 | `"、".join(用户症状)` → DashScope embedding → pgvector cosine 搜索 |
+
+- 阈值过滤：`SIMILARITY_THRESHOLD = 0.3`
+- `matched_symptoms` 交集信息保留作为辅助参考
+- Seed 自动生成：新疾病插入时生成 embedding，已有疾病 `symptom_embedding` 为 None 时自动补算
+- 检索并行化：`retriever.py` 中结构化匹配与向量检索用 `asyncio.gather` 并行
 
 ## Eval 工具（M3）
 
@@ -211,13 +335,14 @@ cd backend
 python -m pytest evals/test_eval.py -v -s
 ```
 
-三个核心指标：
+四个核心指标：
 
-| 指标 | 计算方式 | 当前值 |
-|---|---|---|
-| 诊断命中率 | expected_disease ∈ Top-3 results | 92.0% |
-| 平均追问轮数 | start→diagnose 间的 question 节点数 | 0.7 |
-| 急症召回率 | emergency case 中被正确检出的比例 | 100.0% |
+| 指标 | 计算方式 | 当前值 | 目标 |
+|---|---|---|---|
+| 诊断命中率 | expected_disease ∈ Top-3 results | 92.0% | ≥60% |
+| 平均追问轮数 | start→diagnose 间的 question 节点数 | 0.7 | <3.0 |
+| 急症召回率 | emergency case 中被正确检出的比例 | 100.0% | 100% |
+| 急症精确度 | 被检出为急诊中真正急诊的比例 | 100.0% | 100% |
 
 支持 mock（快速 CI）和 real（完整 E2E）两种模式。
 
@@ -230,7 +355,7 @@ python -m pytest evals/test_eval.py -v -s
 | `messages` | 对话消息 |
 | `symptom_categories` | 症状分类 |
 | `symptoms` | 症状 |
-| `diseases` | 疾病知识库（25 种，MCP Server 管理） |
+| `diseases` | 疾病知识库（25 种，含症状 embedding，MCP Server 管理） |
 | `langchain_pg_*` | pgvector 向量数据 |
 | `checkpoints*` | LangGraph 状态 |
 
@@ -269,3 +394,23 @@ python -m pytest evals/test_eval.py -v -s
 python -m pytest tests/test_triage.py -v
 python -m pytest tests/test_symptom_analyzer_structured.py -v
 ```
+
+### 测试覆盖
+
+| 模块 | 测试文件 | 测试数 |
+|---|---|---|
+| Triage Agent | `tests/test_triage.py` | 16 |
+| Symptom Analyzer | `tests/test_symptom_analyzer_structured.py` | 8 |
+| MCP Server | `tests/test_mcp_*.py` | 11 |
+| Eval | `evals/test_eval.py` | 9 |
+| **总计** | | **44** |
+
+> 上表为业务 / MCP / Eval 单测，不含 `tests/test_api.py`(4) 与 `tests/test_integration.py`(1)——这两个文件默认失败（需 `X-API-Key` 鉴权 + asyncpg 事件循环问题），属环境依赖而非回归，故未计入。
+
+## 已知限制
+
+| 项 | 说明 | 影响 |
+|---|---|---|
+| 指南重新入库 | M1 删除了进程内入库逻辑，`vectors.py` 改为 `PGVector.from_existing_index` 读已存在集合；尚无 `data/guidelines/*.md` → `medical_guidelines` 的 ingest 脚本 | 全新空库下 `search_guidelines` 优雅降级为空结果，结构化疾病检索不受影响 |
+| 迁移残留 | `backend/chroma_db/`（ChromaDB→pgvector 遗留）、`medical_agent*.db`（SQLite→Postgres 遗留） | 建议加 `.gitignore` 或直接删除 |
+| Real-mode eval 前置 | `runner.py` 的 real 模式需 live Postgres + DashScope；CI 走 mock 模式 | 完整 E2E 指标需本地起全套依赖才能复现 |

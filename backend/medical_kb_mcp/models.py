@@ -2,6 +2,7 @@ import uuid
 from sqlalchemy import String, Text, Index
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
@@ -12,12 +13,16 @@ def _gen_id() -> str:
     return str(uuid.uuid4())
 
 
+EMBEDDING_DIM = 1024  # DashScope text-embedding-v3
+
+
 class Disease(Base):
     __tablename__ = "diseases"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_gen_id)
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     symptoms: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
+    symptom_embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     description: Mapped[str] = mapped_column(Text, default="")
     treatment: Mapped[str] = mapped_column(Text, default="")
     when_to_see_doctor: Mapped[str] = mapped_column(Text, default="")
