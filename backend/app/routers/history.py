@@ -6,6 +6,7 @@ from app.schemas import SessionResponse, SessionDetailResponse, MessageResponse
 from app.models import Session, Message
 from app import graph as graph_module
 from app.auth import verify_api_key
+from app.redis import untrack_session, invalidate_session_cache
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -72,5 +73,8 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
             await graph_module.medical_graph.checkpointer.adelete_thread(session_id)
         except Exception as e:
             print(f"[delete_session] checkpoint cleanup failed for {session_id}: {e}")
+
+    await untrack_session(session_id)
+    await invalidate_session_cache(session_id)
 
     return {"ok": True, "session_id": session_id}

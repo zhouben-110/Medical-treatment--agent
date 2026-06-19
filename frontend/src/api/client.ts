@@ -1,14 +1,9 @@
 import { ChatResponse, ChatStage, Session, StreamMeta, SymptomCategory } from '@/types';
 
 const API_BASE = '/api';
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
 
 function getHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_KEY) {
-    headers['X-API-Key'] = API_KEY;
-  }
-  return headers;
+  return { 'Content-Type': 'application/json' };
 }
 
 export async function sendMessage(message: string, sessionId?: string): Promise<ChatResponse> {

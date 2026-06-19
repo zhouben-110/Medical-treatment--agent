@@ -30,6 +30,12 @@ env/
 # Vector store
 backend/chroma_db/
 
+# Test cache
+.pytest_cache/
+
+# Generated artifacts
+.superpowers/
+
 # OS
 .DS_Store
 Thumbs.db

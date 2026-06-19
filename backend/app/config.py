@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
     sql_echo: bool = False
     mcp_server_url: str = "http://localhost:8765/mcp"
+    redis_url: str = "redis://localhost:6379/0"
 
     class Config:
         env_file = ".env"

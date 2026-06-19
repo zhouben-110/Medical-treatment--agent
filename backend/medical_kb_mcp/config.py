@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 class MCPSettings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/medical_agent"
-    llm_api_key: str = ""              # DashScope API key (same .env var the app uses)
+    llm_api_key: str = ""              # DashScope API key
     embedding_model: str = "text-embedding-v3"
     data_dir: str = "./data"
     mcp_host: str = "127.0.0.1"

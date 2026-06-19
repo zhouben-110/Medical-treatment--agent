@@ -3,6 +3,8 @@
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
+from app.redis import cache_get, cache_set, make_symptom_key
+from app.cache import get_cached_diagnosis, cache_diagnosis
 
 # 由 main.py lifespan 注入
 retriever = None
@@ -25,22 +27,38 @@ async def diagnose_and_advise(state: MedicalAgentState) -> dict:
     """诊断 + 建议：获取完整上下文后单次 LLM 调用"""
     symptoms = state.get("symptoms", [])
 
-    # 第一步：MCP 诊断检索（疾病匹配 + 文献）
-    diagnosis_context = ""
-    disease_names = []
-    if retriever:
-        try:
-            diagnosis_context, disease_names = await retriever.retrieve_for_diagnosis(symptoms)
-        except Exception as e:
-            print(f"RAG retrieval error: {e}")
+    # 检查缓存（Redis → 内存）
+    cache_key = make_symptom_key(symptoms, "rag")
+    cached = await cache_get(cache_key)
+    if cached is None:
+        cached = get_cached_diagnosis(symptoms)
 
-    # 第二步：MCP 疾病详情检索（治疗方案、就医指征等）
-    detail_context = ""
-    if retriever and disease_names:
-        try:
-            detail_context = await retriever.retrieve_for_advice(disease_names, symptoms)
-        except Exception as e:
-            print(f"RAG retrieval error for details: {e}")
+    if cached:
+        diagnosis_context = cached.get("diagnosis_context", "")
+        disease_names = cached.get("disease_names", [])
+        detail_context = cached.get("detail_context", "")
+    else:
+        # 第一步：MCP 诊断检索（疾病匹配 + 文献）
+        diagnosis_context = ""
+        disease_names = []
+        if retriever:
+            try:
+                diagnosis_context, disease_names = await retriever.retrieve_for_diagnosis(symptoms)
+            except Exception as e:
+                print(f"RAG retrieval error: {e}")
+
+        # 第二步：MCP 疾病详情检索（治疗方案、就医指征等）
+        detail_context = ""
+        if retriever and disease_names:
+            try:
+                detail_context = await retriever.retrieve_for_advice(disease_names, symptoms)
+            except Exception as e:
+                print(f"RAG retrieval error for details: {e}")
+
+        # 写入缓存
+        payload = {"diagnosis_context": diagnosis_context, "disease_names": disease_names, "detail_context": detail_context}
+        await cache_set(cache_key, payload, ttl=3600)
+        cache_diagnosis(symptoms, payload)
 
     # 合并上下文
     full_context = diagnosis_context

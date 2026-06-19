@@ -21,3 +21,4 @@ slowapi>=0.1.9
 mcp>=1.9.0
 langgraph-supervisor>=0.0.31
 dashscope>=1.20.0
+redis>=5.0.0

@@ -1,8 +1,10 @@
 """Client-side orchestrator: calls atomic MCP tools, assembles medical_context."""
 
 import asyncio
+import hashlib
 import json
 from app.mcp_client import get_tool
+from app.redis import cache_get, cache_set
 
 TOOL_TIMEOUT = 10  # seconds per MCP tool call
 
@@ -37,18 +39,32 @@ class MedicalRetriever:
         self.tools = tools or []
 
     async def _call(self, name: str, args: dict) -> list:
+        # 检查 Redis 缓存
+        args_hash = hashlib.sha256(
+            json.dumps(args, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()[:16]
+        cache_key = f"mc:tool:{name}:{args_hash}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         tool = get_tool(self.tools, name)
         if tool is None:
             return []
         try:
             raw = await asyncio.wait_for(tool.ainvoke(args), timeout=TOOL_TIMEOUT)
-            return _parse_tool_result(raw)
+            result = _parse_tool_result(raw)
         except asyncio.TimeoutError:
             print(f"[retriever] tool {name} timed out after {TOOL_TIMEOUT}s")
             return []
         except Exception as e:
             print(f"[retriever] tool {name} failed: {e}")
             return []
+
+        if result:
+            ttl = 86400 if name == "get_disease_detail" else 3600
+            await cache_set(cache_key, result, ttl=ttl)
+        return result
 
     async def retrieve_for_diagnosis(self, symptoms: list[str]) -> tuple[str, list[str]]:
         """Returns (formatted_context, disease_name_list)."""

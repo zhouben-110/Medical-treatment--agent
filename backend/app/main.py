@@ -9,22 +9,19 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 
 from app import graph as graph_module
 from app.routers import chat, history, symptoms
 from app.database import init_db
 from app.config import get_settings
-
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+from app.redis import init_redis, close_redis, check_rate_limit
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     await init_db()
+    await init_redis(settings.redis_url)
 
     from app.mcp_client import load_tools
     from app.rag.retriever import MedicalRetriever
@@ -38,6 +35,7 @@ async def lifespan(app: FastAPI):
         print(f"Warning: MCP retriever init failed, running without RAG: {e}")
 
     async with AsyncExitStack() as stack:
+        stack.push_async_callback(close_redis)
         conn_str = settings.database_url.replace("+asyncpg", "")
         saver = await stack.enter_async_context(
             AsyncPostgresSaver.from_conn_string(conn_str)
@@ -48,10 +46,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Medical Agent API", lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 settings = get_settings()
+
+
+@app.middleware("http")
+async def global_rate_limit(request: Request, call_next):
+    allowed = await check_rate_limit("rl:global", limit=60, window=60)
+    if not allowed:
+        return JSONResponse(status_code=429, content={"detail": "Global rate limit exceeded"})
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,5 +117,13 @@ async def health():
         checks["cache"] = {"diagnosis_entries": len(_cache)}
     except Exception:
         pass
+
+    # Redis 状态
+    from app.redis import get_redis as _get_redis, get_active_session_count
+    r = _get_redis()
+    checks["redis"] = "ok" if r else "unavailable"
+    active = await get_active_session_count()
+    if active >= 0:
+        checks["active_sessions"] = active
 
     return checks

@@ -12,6 +12,7 @@ AI 驱动的多 Agent 症状分析与治疗建议系统。基于 LangGraph Super
 | SQLAlchemy 2.x + asyncpg | 异步 ORM |
 | PostgreSQL 17 | 主数据库 |
 | pgvector 0.8.0 | 向量检索 |
+| Redis 5.x | 缓存 + 限流 + 会话管理 |
 | Alembic | 数据库迁移 |
 | LangGraph | 多 Agent 状态机 |
 | LangGraph Supervisor | Supervisor 多 Agent 编排 |
@@ -50,7 +51,15 @@ CREATE DATABASE medical_agent;
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 2. 后端
+### 2. Redis
+
+确保 Redis 运行在 `localhost:6379`（可选，不启动则自动降级为无缓存模式）：
+
+```bash
+redis-server
+```
+
+### 3. 后端
 
 ```bash
 cd backend
@@ -68,7 +77,7 @@ uvicorn app.main:app --reload --port 8000
 # Windows 已在 app/main.py 顶部设置 SelectorEventLoop，直接 uvicorn 即可
 ```
 
-### 3. 前端
+### 4. 前端
 
 ```bash
 cd frontend
@@ -78,7 +87,7 @@ npm run dev
 
 访问 http://localhost:3000
 
-### 4. Claude Desktop 集成
+### 5. Claude Desktop 集成
 
 MCP Server 同时支持 stdio 模式，可直接挂载到 Claude Desktop：
 
@@ -93,7 +102,53 @@ MCP Server 同时支持 stdio 模式，可直接挂载到 Claude Desktop：
   }
 }
 ```
+MCP 服务以 子进程 (stdio) 方式运行，不是一个独立的网络服务。
 
+启动链路：
+
+FastAPI lifespan (main.py:21)
+  └─ mcp_client.load_tools()           # main.py:31
+       └─ MultiServerMCPClient({
+            "medical_kb": {
+              "transport": "stdio",          ← 子进程方式
+              "command": sys.executable,     ← 当前 Python 解释器
+              "args": ["-m", "medical_kb_mcp.server", "stdio"]
+            }
+          })
+
+实际效果： FastAPI 启动时，langchain-mcp-adapters 会用当前 Python 解释器 fork 一个子进程 运行 python -m medical_kb_mcp.server stdio，然后通过 stdin/stdout 进行 JSON-RPC 通信。
+
+┌──────────────────────┐     stdio (stdin/stdout)     ┌─────────────────────────┐
+│  FastAPI 主进程       │  ◄──────────────────────►   │  medical_kb_mcp 子进程   │
+│  mcp_client.py       │     JSON-RPC over stdio      │  server.py (FastMCP)    │
+│  retriever.py        │                               │  db.py / vectors.py     │
+└──────────────────────┘                               └─────────────────────────┘
+
+2. 原理：MCP 的工具注册与调用
+
+服务端 (medical_kb_mcp/server.py) 用 FastMCP 注册了 3 个工具：
+
+┌─────────────────────────────┬──────────────────┬───────────────────────────────────────┐
+│           工具名            │       功能       │                数据源                 │
+├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ search_diseases_by_symptoms │ 根据症状匹配疾病 │ Postgres + pgvector 余弦相似度        │
+├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ get_disease_detail          │ 查疾病详情       │ Postgres 精确/模糊查询                │
+├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ search_guidelines           │ 语义检索诊疗指南 │ pgvector 向量库 + DashScope embedding │
+└─────────────────────────────┴──────────────────┴───────────────────────────────────────┘
+
+客户端 (app/mcp_client.py) 调用 await _client.get_tools() 拿到 LangChain Tool 对象列表，之后 retriever.py 通过 tool.ainvoke(args) 调用这些远程工具。
+
+3. 是否真的被使用？
+
+是的，确实被使用了。 整个调用链完整且活跃：
+
+1. main.py:31 — tools = await load_tools() 启动时加载
+2. main.py:32 — retriever = MedicalRetriever(tools) 组装 retriever
+3. main.py:33 — _da_mod.retriever = retriever 注入到诊断节点
+4. diagnose_and_advise.py:46 — retriever.retrieve_for_diagnosis(symptoms) 调用 MCP 工具做疾病匹配
+5. diagnose_and_advise.py:54 — retriever.retrieve_for_advice(disease_names, symptoms) 调用 MCP 工具获取治疗方案
 ## 环境变量
 
 后端配置全部走 `backend/.env`（复制自 `.env.example`）：
@@ -114,6 +169,7 @@ MCP Server 同时支持 stdio 模式，可直接挂载到 Claude Desktop：
 | `LANGCHAIN_API_KEY` | LangSmith Key | — |
 | `LANGCHAIN_PROJECT` | LangSmith 项目名 | `medical-agent` |
 | `MCP_HOST` / `MCP_PORT` | MCP server 监听地址（Claude Desktop 用） | `127.0.0.1` / `8765` |
+| `REDIS_URL` | Redis 连接串（缓存 + 限流 + 会话管理，可选） | `redis://localhost:6379/0` |
 
 ## 项目结构
 
@@ -129,8 +185,9 @@ backend/
 │   ├── main.py             # FastAPI 入口 + lifespan + /health
 │   ├── auth.py             # API Key 认证（hmac.compare_digest）
 │   ├── llm.py              # LLM 实例工厂（带缓存）
+│   ├── redis.py            # Redis 客户端（缓存 + 限流 + 会话管理，自动降级）
 │   ├── summarizer.py       # 对话摘要机制（>12 条消息触发）
-│   ├── cache.py            # 诊断结果缓存（1h TTL）
+│   ├── cache.py            # 诊断结果缓存（内存，Redis 不可用时兜底）
 │   ├── nodes/              # Agent 节点
 │   │   ├── triage.py           # 分诊/急诊 Agent（确定性红旗检测 + LLM）
 │   │   ├── symptom_analyzer.py # 症状提取（Pydantic 结构化输出）
@@ -220,9 +277,12 @@ flowchart TD
     end
 
     subgraph DiagnoseDetail["Diagnose 诊断流程"]
+        D0{"Redis 缓存?"}
         D1["Step 1: retrieve_for_diagnosis"]
         D2["Step 2: retrieve_for_advice"]
         D3["Step 3: LLM 生成诊断报告"]
+        D0 -->|"命中"| D3
+        D0 -->|"未命中"| D1
         D1 --> D2 --> D3
     end
 
@@ -230,12 +290,15 @@ flowchart TD
     Diagnose -.-> DiagnoseDetail
 
     subgraph RAG["RAG 检索 (asyncio.gather 并行)"]
+        RC{"工具缓存?"}
         MCP1["MCP: search_diseases_by_symptoms<br/>pgvector cosine 语义匹配"]
         MCP2["MCP: search_guidelines<br/>医学指南向量检索"]
         MCP3["MCP: get_disease_detail<br/>疾病详情查询"]
+        RC -->|命中| CacheHit["返回缓存"]
+        RC -->|未命中| MCP1
     end
 
-    D1 -->|"并行调用"| MCP1
+    D1 -->|"并行调用"| RC
     D1 -->|"并行调用"| MCP2
     D2 -->|"并行调用"| MCP3
     D2 -->|"并行调用"| MCP2
@@ -243,6 +306,8 @@ flowchart TD
     MCP1 --> DB[(PostgreSQL + pgvector)]
     MCP2 --> DB
     MCP3 --> DB
+
+    CacheHit --> D2
 
     Result -->|SSE events| FE
     Emergency -->|SSE events| FE
@@ -281,6 +346,8 @@ stateDiagram-v2
 3. **合并诊断节点**: `diagnose_and_advise` 将疾病匹配和治疗建议合并为单节点单次 LLM 调用，减少延迟
 4. **并行 RAG**: `asyncio.gather` 同时发起疾病匹配和指南检索，最大化吞吐
 5. **状态持久化**: `AsyncPostgresSaver` 实现多轮对话状态持久化，会话可跨服务重启恢复
+6. **Redis 多级缓存**: 诊断结果（P0）+ 向量检索结果（P1a）双层缓存，Redis → 内存 dict 降级链；Redis 不可用时系统行为等同改造前
+7. **Redis 滑动窗口限流**: 替换 slowapi 进程内存限流，支持多 worker 共享状态，fail-open 设计保证可用性
 
 ## MCP Server（M1）
 
@@ -305,10 +372,15 @@ App 侧直接调用 `medical_kb_mcp.db` / `vectors` 模块的函数，无需启�
 ### 数据流
 
 ```
-diagnose 节点 ─┐
-advise 节点  ─┤→ app/rag/retriever.py ─┐  (asyncio.gather 并行)
-              │    (直接函数调用)        ├─► medical_kb_mcp.db    ─► pgvector(diseases 表, cosine 相似度)
-              │                          └─► medical_kb_mcp.vectors ─► pgvector(guidelines 集合)
+diagnose 节点 ─┐                              ┌─ Redis RAG 缓存 (mc:rag:*)
+              ├─► diagnose_and_advise ────────┤
+advise 节点  ─┘         │                     └─ 内存缓存兜底
+                        ▼
+              app/rag/retriever.py ── Redis 工具缓存 (mc:tool:*) ──┐  (asyncio.gather 并行)
+                        │    (直接函数调用)                         │
+                        ├─► medical_kb_mcp.db    ─► pgvector(diseases 表, cosine 相似度)
+                        └─► medical_kb_mcp.vectors ─► pgvector(guidelines 集合)
+
 Claude Desktop ─(stdio)──► medical_kb_mcp.server ─┘
 ```
 
@@ -369,7 +441,7 @@ python -m pytest evals/test_eval.py -v -s
 | GET | `/api/history/{id}` | 会话详情 |
 | DELETE | `/api/history/{id}` | 删除会话 |
 | GET | `/api/symptoms` | 症状分类 |
-| GET | `/health` | 健康检查（数据库/连接池/LangGraph/缓存） |
+| GET | `/health` | 健康检查（数据库/连接池/LangGraph/缓存/Redis/活跃会话） |
 
 ### 鉴权
 
@@ -411,6 +483,7 @@ python -m pytest tests/test_symptom_analyzer_structured.py -v
 
 | 项 | 说明 | 影响 |
 |---|---|---|
+| Redis 可选 | Redis 用于缓存和限流，不启动时自动降级为无缓存模式，限流退化为进程内存级别 | 开发环境可不装 Redis，生产环境建议开启以获得最佳性能 |
 | 指南重新入库 | M1 删除了进程内入库逻辑，`vectors.py` 改为 `PGVector.from_existing_index` 读已存在集合；尚无 `data/guidelines/*.md` → `medical_guidelines` 的 ingest 脚本 | 全新空库下 `search_guidelines` 优雅降级为空结果，结构化疾病检索不受影响 |
 | 迁移残留 | `backend/chroma_db/`（ChromaDB→pgvector 遗留）、`medical_agent*.db`（SQLite→Postgres 遗留） | 建议加 `.gitignore` 或直接删除 |
 | Real-mode eval 前置 | `runner.py` 的 real 模式需 live Postgres + DashScope；CI 走 mock 模式 | 完整 E2E 指标需本地起全套依赖才能复现 |
