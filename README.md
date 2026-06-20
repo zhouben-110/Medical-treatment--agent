@@ -64,10 +64,12 @@ redis-server
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env   # 编辑 .env 填入 DashScope API Key
+cp .env.example .env   # 编辑 .env 填入 DashScope API Key、Supabase 配置
 alembic upgrade head   # 创建数据库表
 python -m medical_kb_mcp.seed_diseases   # 灌入 25 种疾病数据 + 自动生成 embedding（幂等）
 ```
+
+> **首次启动**：后端启动时会自动创建 `users`、`sessions`、`messages` 等表（通过 `init_db()`）。若表已存在则跳过。
 
 > **关于指南向量库**：`search_guidelines` 读取**已存在**的 `medical_guidelines` 向量集合。全新空库下该集合为空，指南检索会**优雅降级为空结果**（结构化疾病检索不受影响）。重新 ingest `data/guidelines/*.md` 是 M1 之后的跟进项，详见 [`backend/medical_kb_mcp/README.md`](backend/medical_kb_mcp/README.md)。
 
@@ -82,8 +84,17 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
+cp .env.example .env.local   # 编辑 .env.local 填入 Supabase 配置
 npm run dev
 ```
+
+前端 `.env.local` 配置：
+
+| 变量 | 用途 |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名密钥 |
+| `API_KEY` | 后端 API Key（服务端代理注入，不暴露到浏览器） |
 
 访问 http://localhost:3000
 
@@ -162,7 +173,7 @@ FastAPI lifespan (main.py:21)
 | `EMBEDDING_MODEL` | 嵌入模型（1024 维） | `text-embedding-v3` |
 | `EMBEDDING_BASE_URL` | 嵌入端点 | DashScope compatible-mode |
 | `DATA_DIR` | 指南 `.md` 数据目录 | `./data` |
-| `API_KEY` | API 鉴权密钥；**留空则关闭鉴权（开发模式）** | — |
+| `API_KEY` | API 鉴权密钥（向后兼容，主要使用 Supabase JWT） | — |
 | `CORS_ORIGINS` | 允许的前端来源（逗号分隔） | `http://localhost:3000,...` |
 | `SQL_ECHO` | 是否打印 SQL | `false` |
 | `LANGCHAIN_TRACING_V2` | 开启 LangSmith 追踪 | `false` |
@@ -170,6 +181,9 @@ FastAPI lifespan (main.py:21)
 | `LANGCHAIN_PROJECT` | LangSmith 项目名 | `medical-agent` |
 | `MCP_HOST` / `MCP_PORT` | MCP server 监听地址（Claude Desktop 用） | `127.0.0.1` / `8765` |
 | `REDIS_URL` | Redis 连接串（缓存 + 限流 + 会话管理，可选） | `redis://localhost:6379/0` |
+| `SUPABASE_URL` | Supabase 项目 URL（用于 ES256 JWKS 获取） | `https://xxx.supabase.co` |
+| `SUPABASE_ANON_KEY` | Supabase 匿名密钥 | 必填（使用 Supabase 认证时） |
+| `SUPABASE_JWT_SECRET` | Supabase JWT 密钥（HS256 验证用） | Supabase Dashboard > Settings > API |
 
 ## 项目结构
 
@@ -183,7 +197,7 @@ backend/
 │   ├── state.py            # LangGraph 状态定义（含急诊字段）
 │   ├── graph.py            # Supervisor 多 Agent 路由
 │   ├── main.py             # FastAPI 入口 + lifespan + /health
-│   ├── auth.py             # API Key 认证（hmac.compare_digest）
+│   ├── auth.py             # 认证模块（Supabase JWT HS256/ES256 + API Key）
 │   ├── llm.py              # LLM 实例工厂（带缓存）
 │   ├── redis.py            # Redis 客户端（缓存 + 限流 + 会话管理，自动降级）
 │   ├── summarizer.py       # 对话摘要机制（>12 条消息触发）
@@ -221,12 +235,20 @@ backend/
 frontend/
 ├── src/
 │   ├── app/                # Next.js 页面
-│   ├── api/client.ts       # API 客户端
+│   │   ├── login/          # 登录页
+│   │   └── register/       # 注册页
+│   ├── api/client.ts       # API 客户端（自动携带 Supabase JWT）
 │   ├── types/index.ts      # TypeScript 类型
 │   ├── hooks/              # 自定义 Hook
 │   │   ├── useChat.ts          # 聊天状态管理
 │   │   └── useSession.ts       # 会话管理
-│   └── components/         # UI 组件
+│   ├── components/         # UI 组件
+│   │   └── UserNav.tsx     # 用户导航（登录/登出）
+│   ├── contexts/           # React Context
+│   │   └── AuthContext.tsx  # 认证状态管理
+│   └── lib/                # 工具库
+│       └── supabase.ts     # Supabase 客户端
+├── .env.local              # 环境变量（Supabase 配置）
 └── next.config.js          # API 代理
 ```
 
@@ -422,7 +444,7 @@ python -m pytest evals/test_eval.py -v -s
 
 | 表 | 说明 |
 |---|---|
-| `users` | 用户 |
+| `users` | 用户（Supabase JWT 自动创建） |
 | `sessions` | 问诊会话 |
 | `messages` | 对话消息 |
 | `symptom_categories` | 症状分类 |
@@ -435,6 +457,8 @@ python -m pytest evals/test_eval.py -v -s
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| POST | `/api/auth/login` | 邮箱密码登录 |
+| POST | `/api/auth/register` | 用户注册 |
 | POST | `/api/chat` | 发送消息 |
 | POST | `/api/chat/stream` | SSE 流式对话 |
 | GET | `/api/history` | 会话列表 |
@@ -445,9 +469,21 @@ python -m pytest evals/test_eval.py -v -s
 
 ### 鉴权
 
-除 `/health` 外，所有 `/api/*` 路由都通过路由级依赖 `verify_api_key` 校验请求头 `X-API-Key`（值取 `.env` 的 `API_KEY`）。若 `.env` 未设置 `API_KEY`，则**跳过校验（开发模式）**。
+系统支持两种认证方式：
+
+**1. Supabase JWT Token（主要方式）**
+
+前端通过 Supabase 登录后，自动在请求头中携带 `Authorization: Bearer <token>`。后端支持 **HS256** 和 **ES256** 两种算法，自动根据 Token 头部的 `alg` 字段选择验证方式：
+
+- **HS256**：使用 `SUPABASE_JWT_SECRET` 直接验证
+- **ES256**：从 Supabase JWKS 端点 (`/auth/v1/.well-known/jwks.json`) 获取公钥验证
+
+**2. API Key（向后兼容）**
+
+通过请求头 `X-API-Key` 校验（值取 `.env` 的 `API_KEY`）。
 
 ```bash
+curl -H "Authorization: Bearer <supabase-jwt>" http://localhost:8000/api/symptoms
 curl -H "X-API-Key: $API_KEY" http://localhost:8000/api/symptoms
 ```
 
@@ -483,6 +519,7 @@ python -m pytest tests/test_symptom_analyzer_structured.py -v
 
 | 项 | 说明 | 影响 |
 |---|---|---|
+| Supabase JWT 算法 | Supabase 近期将 JWT 签名从 HS256 切换到 ES256，后端已支持自动识别两种算法 | 使用 ES256 时需配置 `SUPABASE_URL` 以获取 JWKS 公钥 |
 | Redis 可选 | Redis 用于缓存和限流，不启动时自动降级为无缓存模式，限流退化为进程内存级别 | 开发环境可不装 Redis，生产环境建议开启以获得最佳性能 |
 | 指南重新入库 | M1 删除了进程内入库逻辑，`vectors.py` 改为 `PGVector.from_existing_index` 读已存在集合；尚无 `data/guidelines/*.md` → `medical_guidelines` 的 ingest 脚本 | 全新空库下 `search_guidelines` 优雅降级为空结果，结构化疾病检索不受影响 |
 | 迁移残留 | `backend/chroma_db/`（ChromaDB→pgvector 遗留）、`medical_agent*.db`（SQLite→Postgres 遗留） | 建议加 `.gitignore` 或直接删除 |

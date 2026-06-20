@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey, func
+from sqlalchemy import Column, String, DateTime, Text, Boolean, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.database import Base
 import uuid
@@ -11,7 +11,10 @@ def generate_id():
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True, default=generate_id)
+    # id 使用 Supabase 的 user id (UUID 格式)
+    id = Column(String, primary_key=True)
+    email = Column(String, unique=True, index=True, nullable=True)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     sessions = relationship("Session", back_populates="user")
 

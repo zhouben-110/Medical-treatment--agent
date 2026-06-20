@@ -3,16 +3,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from app.database import get_db
 from app.schemas import SessionResponse, SessionDetailResponse, MessageResponse
-from app.models import Session, Message
+from app.models import Session, Message, User
 from app import graph as graph_module
-from app.auth import verify_api_key
+from app.auth import get_current_user
 from app.redis import untrack_session, invalidate_session_cache
 
-router = APIRouter(dependencies=[Depends(verify_api_key)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/history", response_model=list[SessionResponse])
-async def get_history(db: AsyncSession = Depends(get_db)):
+async def get_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # 只返回当前用户的 session
     result = await db.execute(
         select(
             Session.id,
@@ -21,6 +22,7 @@ async def get_history(db: AsyncSession = Depends(get_db)):
             func.count(Message.id).label("message_count"),
         )
         .outerjoin(Message, Message.session_id == Session.id)
+        .where(Session.user_id == user.id)
         .group_by(Session.id)
         .order_by(Session.created_at.desc())
     )
@@ -38,10 +40,14 @@ async def get_history(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/history/{session_id}", response_model=SessionDetailResponse)
-async def get_session_detail(session_id: str, db: AsyncSession = Depends(get_db)):
+async def get_session_detail(session_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     session = await db.get(Session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # 验证 session 属于当前用户
+    if session.user_id != user.id:
+        raise HTTPException(status_code=403, detail="无权访问该会话")
 
     result = await db.execute(
         select(Message).where(Message.session_id == session_id).order_by(Message.timestamp)
@@ -59,10 +65,14 @@ async def get_session_detail(session_id: str, db: AsyncSession = Depends(get_db)
 
 
 @router.delete("/history/{session_id}")
-async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_session(session_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     session = await db.get(Session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # 验证 session 属于当前用户
+    if session.user_id != user.id:
+        raise HTTPException(status_code=403, detail="无权删除该会话")
 
     await db.execute(delete(Message).where(Message.session_id == session_id))
     await db.delete(session)

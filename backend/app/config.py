@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     mcp_server_url: str = "http://localhost:8765/mcp"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Supabase 配置
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_jwt_secret: str = ""  # 在 Supabase Dashboard > Settings > API > JWT Secret 获取
+
     class Config:
         env_file = ".env"
         extra = "ignore"

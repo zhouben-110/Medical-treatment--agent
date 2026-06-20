@@ -19,6 +19,13 @@ async function proxy(request: NextRequest, path: string[]) {
     headers.set('X-API-Key', apiKey);
   }
 
+  // 传递 Authorization header（Supabase JWT）
+  const authHeader = request.headers.get('authorization');
+  console.log('[API Proxy] Authorization header:', authHeader ? `${authHeader.substring(0, 50)}...` : 'missing');
+  if (authHeader) {
+    headers.set('Authorization', authHeader);
+  }
+
   const init: RequestInit = {
     method: request.method,
     headers,

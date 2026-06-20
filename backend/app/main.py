@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app import graph as graph_module
-from app.routers import chat, history, symptoms
+from app.routers import chat, history, symptoms, auth
 from app.database import init_db
 from app.config import get_settings
 from app.redis import init_redis, close_redis, check_rate_limit
@@ -68,6 +68,7 @@ app.add_middleware(
 app.include_router(chat.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(symptoms.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 
 
 @app.get("/")

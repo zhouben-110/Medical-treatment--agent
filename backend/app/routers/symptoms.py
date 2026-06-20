@@ -4,13 +4,13 @@ from sqlalchemy import select
 from app.database import get_db
 from app.schemas import SymptomListResponse, SymptomCategoryResponse
 from app.models import SymptomCategory, Symptom
-from app.auth import verify_api_key
 
-router = APIRouter(dependencies=[Depends(verify_api_key)])
+router = APIRouter()
 
 
 @router.get("/symptoms", response_model=SymptomListResponse)
 async def get_symptoms(db: AsyncSession = Depends(get_db)):
+    """获取症状列表（无需认证）"""
     result = await db.execute(select(SymptomCategory))
     categories = result.scalars().all()
 

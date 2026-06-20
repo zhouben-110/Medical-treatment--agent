@@ -3,9 +3,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session
 from app.schemas import ChatRequest, ChatResponse
-from app.models import Session, Message
+from app.models import Session, Message, User
 from app import graph as graph_module
-from app.auth import verify_api_key
+from app.auth import get_current_user
 from app.summarizer import maybe_summarize_messages
 from app.redis import (
     check_rate_limit,
@@ -25,7 +25,7 @@ async def rate_limit_chat(request: Request):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
-router = APIRouter(dependencies=[Depends(verify_api_key)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 async def _maybe_summarize_state(cfg: dict):
@@ -131,15 +131,18 @@ async def _reset_context_if_needed(cfg: dict, graph_input: dict):
         await asyncio.to_thread(graph_module.medical_graph.update_state, cfg, {"messages": keep_messages})
 
 
-async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession) -> Session:
+async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession, user_id: str) -> Session:
     sid = str(request.session_id) if request.session_id else None
     if sid:
         session = await db.get(Session, sid)
+        # 验证 session 属于当前用户
+        if session and session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="无权访问该会话")
         if not session:
-            session = Session(id=sid, title=request.message[:20])
+            session = Session(id=sid, user_id=user_id, title=request.message[:20])
             db.add(session)
     else:
-        session = Session(title=request.message[:20])
+        session = Session(user_id=user_id, title=request.message[:20])
         db.add(session)
         await db.flush()
 
@@ -149,8 +152,8 @@ async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession) -
 
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(rate_limit_chat)])
-async def chat(request: Request, body: ChatRequest, db: AsyncSession = Depends(get_db)):
-    session = await _ensure_session_and_log_user(body, db)
+async def chat(request: Request, body: ChatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    session = await _ensure_session_and_log_user(body, db, user.id)
     session_id = str(session.id)
     await track_session(session_id)
 
@@ -207,9 +210,9 @@ async def chat(request: Request, body: ChatRequest, db: AsyncSession = Depends(g
 
 
 @router.post("/chat/stream", dependencies=[Depends(rate_limit_chat)])
-async def chat_stream(request: Request, body: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     try:
-        session = await _ensure_session_and_log_user(body, db)
+        session = await _ensure_session_and_log_user(body, db, user.id)
         session_id = str(session.id)
         await track_session(session_id)
 

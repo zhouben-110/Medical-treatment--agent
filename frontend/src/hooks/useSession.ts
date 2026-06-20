@@ -3,14 +3,19 @@
 import { useState, useEffect } from 'react';
 import { Session } from '@/types';
 import { getHistory, getSessionDetail, deleteSession } from '@/api/client';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function useSession() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
+  const { session, loading: authLoading } = useAuth();
 
   useEffect(() => {
-    loadHistory();
-  }, []);
+    // 等待认证完成后再加载历史
+    if (!authLoading && session) {
+      loadHistory();
+    }
+  }, [authLoading, session]);
 
   const loadHistory = async () => {
     const data = await getHistory();
