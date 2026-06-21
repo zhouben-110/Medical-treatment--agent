@@ -1,12 +1,14 @@
-"""诊断结果缓存：相似症状组合复用诊断结果"""
+"""诊断结果缓存：相似症状组合复用诊断结果（LRU 策略）"""
 
 import time
 from typing import Optional
+from collections import OrderedDict
 
-# 内存缓存：key 为排序后的症状元组，value 为 (result, timestamp)
-_cache: dict[tuple, tuple[dict, float]] = {}
 MAX_CACHE_SIZE = 200
 CACHE_TTL = 3600  # 1 小时过期
+
+# LRU 缓存：key 为排序后的症状元组，value 为 (result, timestamp)
+_cache: OrderedDict[tuple, tuple[dict, float]] = OrderedDict()
 
 
 def _make_key(symptoms: list[str]) -> tuple:
@@ -20,19 +22,22 @@ def get_cached_diagnosis(symptoms: list[str]) -> Optional[dict]:
     if entry is None:
         return None
     result, ts = entry
+    # 检查是否过期
     if time.time() - ts > CACHE_TTL:
         del _cache[key]
         return None
+    # 移到末尾（最近使用）
+    _cache.move_to_end(key)
     return result
 
 
 def cache_diagnosis(symptoms: list[str], result: dict):
-    """缓存诊断结果"""
-    global _cache
+    """缓存诊断结果，LRU 淘汰策略"""
     key = _make_key(symptoms)
-    # 简单淘汰：超过上限清空最旧的一半
-    if len(_cache) >= MAX_CACHE_SIZE:
-        sorted_keys = sorted(_cache.keys(), key=lambda k: _cache[k][1])
-        for k in sorted_keys[:MAX_CACHE_SIZE // 2]:
-            del _cache[k]
+    # 如果已存在，先删除再重新插入（移到末尾）
+    if key in _cache:
+        del _cache[key]
+    # 超过上限时淘汰最久未使用的（头部）
+    while len(_cache) >= MAX_CACHE_SIZE:
+        _cache.popitem(last=False)
     _cache[key] = (result, time.time())

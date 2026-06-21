@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app import graph as graph_module
-from app.routers import chat, history, symptoms, auth
+from app.routers import chat, history, symptoms, auth, admin
 from app.database import init_db
 from app.config import get_settings
 from app.redis import init_redis, close_redis, check_rate_limit
@@ -61,14 +61,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "PUT"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 app.include_router(chat.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(symptoms.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
 
 
 @app.get("/")
@@ -78,53 +79,5 @@ async def root():
 
 @app.get("/health")
 async def health():
-    from sqlalchemy import text
-    from app.database import async_session, engine
-
-    checks = {"status": "ok"}
-
-    # 数据库连接检查
-    try:
-        async with async_session() as db:
-            await db.execute(text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as e:
-        checks["database"] = f"error: {e}"
-        checks["status"] = "degraded"
-
-    # 连接池状态
-    pool = engine.pool
-    checks["pool"] = {
-        "size": pool.size(),
-        "checked_in": pool.checkedin(),
-        "checked_out": pool.checkedout(),
-        "overflow": pool.overflow(),
-    }
-
-    # LangGraph 状态检查
-    try:
-        if graph_module.medical_graph is not None:
-            checks["langgraph"] = "ok"
-        else:
-            checks["langgraph"] = "not initialized"
-            checks["status"] = "degraded"
-    except Exception as e:
-        checks["langgraph"] = f"error: {e}"
-        checks["status"] = "degraded"
-
-    # 缓存状态
-    try:
-        from app.cache import _cache
-        checks["cache"] = {"diagnosis_entries": len(_cache)}
-    except Exception:
-        pass
-
-    # Redis 状态
-    from app.redis import get_redis as _get_redis, get_active_session_count
-    r = _get_redis()
-    checks["redis"] = "ok" if r else "unavailable"
-    active = await get_active_session_count()
-    if active >= 0:
-        checks["active_sessions"] = active
-
-    return checks
+    """简化版健康检查，不暴露内部状态"""
+    return {"status": "ok"}

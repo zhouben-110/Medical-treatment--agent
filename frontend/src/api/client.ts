@@ -186,3 +186,98 @@ export async function getSymptoms(): Promise<{ categories: SymptomCategory[] }> 
 
   return response.json();
 }
+
+// ========== 管理员 API ==========
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AdminUserList {
+  total: number;
+  page: number;
+  size: number;
+  items: AdminUser[];
+}
+
+export async function getAdminUsers(page = 1, size = 20): Promise<AdminUserList> {
+  const response = await fetch(`${API_BASE}/admin/users?page=${page}&size=${size}`, {
+    headers: await getHeaders(),
+  });
+
+  if (response.status === 403) {
+    throw new Error('FORBIDDEN');
+  }
+  if (response.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  return response.json();
+}
+
+export async function updateUserRole(userId: string, role: string): Promise<{ id: string; email: string; role: string }> {
+  const response = await fetch(`${API_BASE}/admin/users/${userId}/role`, {
+    method: 'PUT',
+    headers: await getHeaders(),
+    body: JSON.stringify({ role }),
+  });
+
+  if (response.status === 403) {
+    throw new Error('FORBIDDEN');
+  }
+  if (response.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.detail || `操作失败 (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function updateUserStatus(userId: string, isActive: boolean): Promise<{ id: string; email: string; is_active: boolean }> {
+  const response = await fetch(`${API_BASE}/admin/users/${userId}/status`, {
+    method: 'PUT',
+    headers: await getHeaders(),
+    body: JSON.stringify({ is_active: isActive }),
+  });
+
+  if (response.status === 403) {
+    throw new Error('FORBIDDEN');
+  }
+  if (response.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.detail || `操作失败 (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function deleteUser(userId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
+    method: 'DELETE',
+    headers: await getHeaders(),
+  });
+
+  if (response.status === 403) {
+    throw new Error('FORBIDDEN');
+  }
+  if (response.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.detail || `操作失败 (${response.status})`);
+  }
+}

@@ -61,9 +61,7 @@ python -m alembic upgrade head
 
 ```bash
 # 后端
-cd backend
-python start.py
-
+cd backend && python -m uvicorn app.main:app --reload --port 8000
 # 前端
 cd frontend
 npm run dev

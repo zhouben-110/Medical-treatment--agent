@@ -1,12 +1,15 @@
 'use client'
 
+import { useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import ChangePasswordModal from './ChangePasswordModal'
 
 export default function UserNav() {
-  const { user, loading, signOut } = useAuth()
+  const { user, role, loading, signOut } = useAuth()
   const router = useRouter()
+  const [showChangePassword, setShowChangePassword] = useState(false)
 
   if (loading) {
     return (
@@ -41,23 +44,44 @@ export default function UserNav() {
   }
 
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex items-center gap-2">
-        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
+    <>
+      <div className="flex items-center gap-3">
+        {role === 'admin' && (
+          <Link
+            href="/admin"
+            className="px-3 py-1.5 text-sm text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg transition"
+          >
+            管理后台
+          </Link>
+        )}
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+          </div>
+          <span className="text-sm text-gray-700 max-w-[150px] truncate">
+            {user.email}
+          </span>
         </div>
-        <span className="text-sm text-gray-700 max-w-[150px] truncate">
-          {user.email}
-        </span>
+        <button
+          onClick={() => setShowChangePassword(true)}
+          className="px-3 py-1.5 text-sm text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+        >
+          修改密码
+        </button>
+        <button
+          onClick={handleSignOut}
+          className="px-3 py-1.5 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+        >
+          登出
+        </button>
       </div>
-      <button
-        onClick={handleSignOut}
-        className="px-3 py-1.5 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-      >
-        登出
-      </button>
-    </div>
+
+      <ChangePasswordModal
+        isOpen={showChangePassword}
+        onClose={() => setShowChangePassword(false)}
+      />
+    </>
   )
 }

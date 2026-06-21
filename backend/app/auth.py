@@ -9,6 +9,7 @@ import jwt
 from jwt import PyJWKSet
 from fastapi import Security, HTTPException, status, Depends
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -175,7 +176,7 @@ async def get_current_user(
         )
 
     token = credentials.credentials
-    logger.info(f"收到 token: {token[:50]}...")
+    logger.debug(f"收到 token, 长度: {len(token)}")
     payload = decode_supabase_token(token)
 
     # Supabase JWT 的 sub 字段是用户 ID
@@ -191,16 +192,22 @@ async def get_current_user(
     # 查找或创建本地用户
     user = await db.get(User, supabase_user_id)
     if not user:
+        # 检查是否是第一个用户（首个用户自动成为管理员）
+        result = await db.execute(select(func.count()).select_from(User))
+        user_count = result.scalar()
+        role = "admin" if user_count == 0 else "user"
+
         # 首次登录，创建本地用户记录
         user = User(
             id=supabase_user_id,
             email=email,
             is_active=True,
+            role=role,
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        logger.info(f"创建新用户: {supabase_user_id}")
+        logger.info(f"创建新用户: {supabase_user_id}, 角色: {role}")
 
     if not user.is_active:
         raise HTTPException(
@@ -235,3 +242,18 @@ async def get_optional_user(
         return user if user and user.is_active else None
     except HTTPException:
         return None
+
+
+async def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    管理员权限依赖。
+    校验当前用户是否为管理员，否则返回 403。
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return current_user

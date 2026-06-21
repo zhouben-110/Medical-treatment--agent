@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // 需要保护的路由（未登录时重定向到登录页）
-const protectedRoutes = ['/']
+const protectedRoutes = ['/', '/admin']
 // 不需要保护的路由（已登录时可访问）
 const authRoutes = ['/login', '/register']
 

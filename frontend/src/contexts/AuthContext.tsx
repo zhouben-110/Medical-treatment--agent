@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
 import { User, Session } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
@@ -8,11 +8,13 @@ import { useRouter } from 'next/navigation'
 interface AuthContextType {
   user: User | null
   session: Session | null
+  role: string | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>
   signUp: (email: string, password: string) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
   getAccessToken: () => Promise<string | null>
+  refreshRole: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -20,9 +22,31 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
+  const [role, setRole] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const supabase = createClient()
+
+  const fetchRole = useCallback(async () => {
+    try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      if (!currentSession?.access_token) {
+        setRole(null)
+        return
+      }
+      const resp = await fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${currentSession.access_token}` },
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        setRole(data.role ?? 'user')
+      } else {
+        setRole(null)
+      }
+    } catch {
+      setRole(null)
+    }
+  }, [supabase])
 
   useEffect(() => {
     // 获取初始 session
@@ -30,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(session)
       setUser(session?.user ?? null)
       setLoading(false)
+      if (session) fetchRole()
     })
 
     // 监听认证状态变化
@@ -40,9 +65,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false)
 
         if (event === 'SIGNED_IN') {
+          await fetchRole()
           router.refresh()
         }
         if (event === 'SIGNED_OUT') {
+          setRole(null)
           router.push('/login')
           router.refresh()
         }
@@ -50,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [router, supabase])
+  }, [router, supabase, fetchRole])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({
@@ -77,14 +104,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return session?.access_token ?? null
   }
 
+  const refreshRole = async () => {
+    await fetchRole()
+  }
+
   const value = {
     user,
     session,
+    role,
     loading,
     signIn,
     signUp,
     signOut,
     getAccessToken,
+    refreshRole,
   }
 
   return (

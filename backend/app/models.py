@@ -15,8 +15,9 @@ class User(Base):
     id = Column(String, primary_key=True)
     email = Column(String, unique=True, index=True, nullable=True)
     is_active = Column(Boolean, default=True)
+    role = Column(String, default="user")  # 'user' or 'admin'
     created_at = Column(DateTime, server_default=func.now())
-    sessions = relationship("Session", back_populates="user")
+    sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
 
 
 class Session(Base):
@@ -28,7 +29,7 @@ class Session(Base):
     created_at = Column(DateTime, server_default=func.now())
     diagnosis = Column(Text, nullable=True)
     user = relationship("User", back_populates="sessions")
-    messages = relationship("Message", back_populates="session", order_by="Message.timestamp")
+    messages = relationship("Message", back_populates="session", order_by="Message.timestamp", cascade="all, delete-orphan")
 
 
 class Message(Base):
