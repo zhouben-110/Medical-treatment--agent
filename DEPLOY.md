@@ -157,10 +157,6 @@ CORS_ORIGINS=https://medical-agent-xxxx.vercel.app
 ### Railway 自定义域名
 1. Railway 服务 → **Settings** → **Networking**
 2. 点击 **Generate Domain** 或添加自定义域名
-<<<<<<< HEAD
-
-
-
 
 
 
@@ -215,5 +211,3 @@ CORS_ORIGINS=https://medical-agent-xxxx.vercel.app
   3. 前后端怎么通信的？（前端直接调后端 API？还是有 Nginx 代理？）
 
   这些影响 Dockerfile 和 compose 怎么写。
-=======
->>>>>>> 292ae96379cb4ec304bfa4e9a424157052318565
