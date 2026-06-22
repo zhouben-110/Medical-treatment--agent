@@ -71,33 +71,33 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
       />
 
       {/* 弹窗内容 */}
-      <div className="relative w-full max-w-md mx-4 p-8 bg-white rounded-2xl shadow-lg">
+      <div className="relative w-full max-w-md mx-4 p-8 bg-white dark:bg-gray-800 rounded-2xl shadow-lg">
         <button
           onClick={handleClose}
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
+          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <h2 className="text-xl font-bold text-gray-900 mb-6">修改密码</h2>
+        <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-6">修改密码</h2>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
-            <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg">
+            <div className="p-3 text-sm text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 rounded-lg">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="p-3 text-sm text-green-600 bg-green-50 rounded-lg">
+            <div className="p-3 text-sm text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400 rounded-lg">
               密码修改成功！
             </div>
           )}
 
           <div>
-            <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               新密码
             </label>
             <input
@@ -108,12 +108,12 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
               required
               minLength={6}
               placeholder="至少6位密码"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
           </div>
 
           <div>
-            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               确认新密码
             </label>
             <input
@@ -124,7 +124,7 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
               required
               minLength={6}
               placeholder="再次输入新密码"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
           </div>
 

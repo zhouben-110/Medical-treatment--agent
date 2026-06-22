@@ -10,6 +10,7 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
   const [symptoms, setSymptoms] = useState<string[]>([]);
   const [needMoreInfo, setNeedMoreInfo] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -26,8 +27,18 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
     });
   };
 
+  // 组件卸载时中止正在进行的流
+  useEffect(() => {
+    return () => {
+      abortRef.current?.();
+    };
+  }, []);
+
   const sendMessage = (content: string) => {
     if (!content.trim() || loading) return;
+
+    // 中止之前的流
+    abortRef.current?.();
 
     const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content };
     setMessages((prev) => [...prev, userMessage]);
@@ -37,7 +48,7 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
     const aiMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: '' };
     setMessages((prev) => [...prev, aiMessage]);
 
-    sendMessageStream(
+    const abort = sendMessageStream(
       content,
       sessionId,
       (chunk, stage) => {
@@ -78,6 +89,7 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
         setLoading(false);
       }
     );
+    abortRef.current = abort;
   };
 
   const resetChat = () => {

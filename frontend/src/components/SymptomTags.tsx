@@ -19,7 +19,7 @@ export default function SymptomTags({ symptoms }: Props) {
       {symptoms.map((symptom, index) => (
         <span
           key={index}
-          className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm"
+          className="px-3 py-1 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 rounded-full text-sm"
         >
           {parseSymptom(symptom)}
         </span>
