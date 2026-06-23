@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChatStage, Message } from '@/types';
 import { sendMessageStream } from '@/api/client';
+import { randomUUID } from '@/lib/uuid';
 
 export function useChat(sessionId: string | undefined, onSessionCreated: (id: string) => void) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -40,12 +41,12 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
     // 中止之前的流
     abortRef.current?.();
 
-    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content };
+    const userMessage: Message = { id: randomUUID(), role: 'user', content };
     setMessages((prev) => [...prev, userMessage]);
     setLoading(true);
     setNeedMoreInfo(false);
 
-    const aiMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: '' };
+    const aiMessage: Message = { id: randomUUID(), role: 'assistant', content: '' };
     setMessages((prev) => [...prev, aiMessage]);
 
     const abort = sendMessageStream(
@@ -99,7 +100,7 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
   };
 
   const loadMessages = (msgs: Message[]) => {
-    setMessages(msgs.map((m) => ({ ...m, id: m.id || crypto.randomUUID() })));
+    setMessages(msgs.map((m) => ({ ...m, id: m.id || randomUUID() })));
     setNeedMoreInfo(false);
   };
 
