@@ -74,6 +74,7 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       API_KEY: ${API_KEY}
+      BACKEND_URL: http://backend:8000
     depends_on:
       - backend
     ports:

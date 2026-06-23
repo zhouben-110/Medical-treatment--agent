@@ -8,11 +8,18 @@ async function getHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json',
   };
 
-  // 获取 Supabase access token
-  const supabase = createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    headers['Authorization'] = `Bearer ${session.access_token}`;
+  // 获取 Supabase access token（带超时，防止 Supabase 不可达时卡住）
+  try {
+    const supabase = createClient();
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+    const result = await Promise.race([sessionPromise, timeoutPromise]);
+    const session = result?.data?.session;
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+  } catch (err) {
+    console.warn('Failed to get Supabase session:', err);
   }
 
   return headers;
