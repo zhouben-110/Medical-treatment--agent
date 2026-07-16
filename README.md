@@ -98,7 +98,7 @@ graph LR
         MCPServer[MCP Server] --> DB[("PostgreSQL + pgvector")]
     end
     MCP <--> MCPServer
-
+```
 ### 状态流转图
 ```mermaid
 stateDiagram-v2
@@ -119,7 +119,6 @@ stateDiagram-v2
 
 ## 📊 自动化评测 (E2E & CI)
 
->>>>>>> d5240a3 (jwt1)
 系统自带了一套评测引擎，内置 35 个真实问诊 Case，支持 Mock 模式（用于 CI）和 Real 模式（调用真实模型与 DB 评估）。
 
 ```bash
