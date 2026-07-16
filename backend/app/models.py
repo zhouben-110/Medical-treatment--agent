@@ -11,9 +11,10 @@ def generate_id():
 class User(Base):
     __tablename__ = "users"
 
-    # id 使用 Supabase 的 user id (UUID 格式)
-    id = Column(String, primary_key=True)
+    # id 默认使用自动生成的 UUID 格式
+    id = Column(String, primary_key=True, default=generate_id)
     email = Column(String, unique=True, index=True, nullable=True)
+    hashed_password = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     role = Column(String, default="user")  # 'user' or 'admin'
     created_at = Column(DateTime, server_default=func.now())

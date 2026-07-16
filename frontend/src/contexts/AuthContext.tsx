@@ -1,8 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback, useRef } from 'react'
-import { User, Session } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase'
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 
 // Helper functions for cookies
@@ -28,6 +26,20 @@ function getCookie(name: string) {
   return null
 }
 
+export interface User {
+  id: string
+  email: string
+  is_active: boolean
+  role: string
+  created_at: string
+}
+
+export interface Session {
+  access_token: string
+  token_type: string
+  user: User
+}
+
 interface AuthContextType {
   user: User | null
   session: Session | null
@@ -48,187 +60,146 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
-  const supabaseRef = useRef(createClient())
-  const supabase = supabaseRef.current
 
-  const fetchRole = useCallback(async () => {
-    // If mock cookie is present, return immediately
-    const mockRole = getCookie('mock-user-role')
-    if (mockRole) {
-      setRole(mockRole)
-      return
-    }
-
+  const fetchUser = useCallback(async (token: string) => {
     try {
-      const { data: { session: currentSession } } = await supabase.auth.getSession()
-      if (!currentSession?.access_token) {
-        setRole(null)
-        return
-      }
       const resp = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${currentSession.access_token}` },
+        headers: { Authorization: `Bearer ${token}` },
       })
       if (resp.ok) {
-        const data = await resp.json()
-        setRole(data.role ?? 'user')
+        const userData = await resp.json()
+        setUser(userData)
+        setRole(userData.role ?? 'user')
+        setSession({
+          access_token: token,
+          token_type: 'bearer',
+          user: userData,
+        })
       } else {
+        // Token invalid or expired
+        deleteCookie('access-token')
+        setUser(null)
         setRole(null)
+        setSession(null)
       }
-    } catch {
-      setRole(null)
+    } catch (err) {
+      console.error('Fetch user failed:', err)
+    } finally {
+      setLoading(false)
     }
-  }, [supabase])
+  }, [])
 
   useEffect(() => {
-    // 1. Check if mock login is used
-    const mockRole = getCookie('mock-user-role')
-    if (mockRole) {
-      const mockEmail = `${mockRole}@example.com`
-      const mockUserObj: User = {
-        id: `mock-${mockRole}-id`,
-        email: mockEmail,
-        aud: 'authenticated',
-        role: 'authenticated',
-        app_metadata: {},
-        user_metadata: {},
-        created_at: new Date().toISOString(),
-      }
-      const mockSessionObj: Session = {
-        access_token: `mock-token-${mockRole}`,
-        token_type: 'bearer',
-        expires_in: 3600,
-        refresh_token: 'mock-refresh-token',
-        user: mockUserObj,
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }
-      setUser(mockUserObj)
-      setSession(mockSessionObj)
-      setRole(mockRole)
-      setLoading(false)
-      return
-    }
-
-    // 2. Fallback to Supabase if mock not present
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-      if (session) fetchRole()
-    }).catch((err) => {
-      console.warn('Supabase session load failed:', err)
-      setLoading(false)
-    })
-
-    // Listen for auth state change
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        // If we are in mock mode, ignore Supabase auth state change unless they explicitly signed out
-        if (getCookie('mock-user-role')) return
-
-        setSession(session)
-        setUser(session?.user ?? null)
+    const token = getCookie('access-token')
+    if (token) {
+      // If using mock token offline bypass
+      if (token === 'mock-token-admin' || token === 'mock-token-user') {
+        const computedRole = token === 'mock-token-admin' ? 'admin' : 'user'
+        const mockUser: User = {
+          id: `mock-${computedRole}-id`,
+          email: `${computedRole}@example.com`,
+          is_active: true,
+          role: computedRole,
+          created_at: new Date().toISOString(),
+        }
+        setUser(mockUser)
+        setRole(computedRole)
+        setSession({
+          access_token: token,
+          token_type: 'bearer',
+          user: mockUser,
+        })
         setLoading(false)
-
-        if (event === 'SIGNED_IN') {
-          await fetchRole()
-          router.refresh()
-        }
-        if (event === 'SIGNED_OUT') {
-          setRole(null)
-          router.push('/login')
-          router.refresh()
-        }
+      } else {
+        fetchUser(token)
       }
-    )
-
-    return () => subscription.unsubscribe()
-  }, [router, supabase, fetchRole])
+    } else {
+      setLoading(false)
+    }
+  }, [fetchUser])
 
   const signIn = async (email: string, password: string) => {
-    // If using mock logins (e.g. admin@example.com / user@example.com)
+    // offline/mock bypass
     if (email === 'admin@example.com' || email === 'user@example.com') {
       const computedRole = email.startsWith('admin') ? 'admin' : 'user'
-      setCookie('mock-user-role', computedRole, 7)
-      setCookie('mock-access-token', `mock-token-${computedRole}`, 7)
+      const mockToken = `mock-token-${computedRole}`
+      setCookie('access-token', mockToken, 7)
       
       const mockUserObj: User = {
         id: `mock-${computedRole}-id`,
         email: email,
-        aud: 'authenticated',
-        role: 'authenticated',
-        app_metadata: {},
-        user_metadata: {},
+        is_active: true,
+        role: computedRole,
         created_at: new Date().toISOString(),
       }
-      const mockSessionObj: Session = {
-        access_token: `mock-token-${computedRole}`,
-        token_type: 'bearer',
-        expires_in: 3600,
-        refresh_token: 'mock-refresh-token',
-        user: mockUserObj,
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }
       setUser(mockUserObj)
-      setSession(mockSessionObj)
+      setSession({
+        access_token: mockToken,
+        token_type: 'bearer',
+        user: mockUserObj,
+      })
       setRole(computedRole)
       router.refresh()
       return { error: null }
     }
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
       })
-      if (error) return { error }
+      if (!resp.ok) {
+        const data = await resp.json()
+        return { error: new Error(data.detail || '登录失败') }
+      }
+      const data = await resp.json() // Contains access_token, user, etc.
+      setCookie('access-token', data.access_token, 7)
+      setUser(data.user)
+      setRole(data.user.role)
+      setSession(data)
+      router.refresh()
       return { error: null }
     } catch (err: any) {
-      // Fallback/offline behavior: If connection failed and email/password are provided, offer offline bypass
-      return { error: new Error('网络连接超时。您可以输入本地模拟账户以离线模式登录：\n管理员账户：admin@example.com（密码任意）\n普通账户：user@example.com（密码任意）') }
+      return { error: new Error('网络连接错误。您可以输入本地模拟账户以离线模式登录：\n管理员账户：admin@example.com（密码任意）\n普通账户：user@example.com（密码任意）') }
     }
   }
 
   const signUp = async (email: string, password: string) => {
     try {
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
+      const resp = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
       })
-      return { error }
+      if (!resp.ok) {
+        const data = await resp.json()
+        return { error: new Error(data.detail || '注册失败') }
+      }
+      return { error: null }
     } catch (err: any) {
       return { error: err }
     }
   }
 
   const signOut = async () => {
-    deleteCookie('mock-user-role')
-    deleteCookie('mock-access-token')
+    deleteCookie('access-token')
     setUser(null)
     setSession(null)
     setRole(null)
-    try {
-      await supabase.auth.signOut()
-    } catch (e) {
-      // ignore offline signout errors
-    }
     router.push('/login')
     router.refresh()
   }
 
   const getAccessToken = async () => {
-    const mockToken = getCookie('mock-access-token')
-    if (mockToken) return mockToken
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      return session?.access_token ?? null
-    } catch {
-      return null
-    }
+    return getCookie('access-token')
   }
 
   const refreshRole = async () => {
-    await fetchRole()
+    const token = getCookie('access-token')
+    if (token && token !== 'mock-token-admin' && token !== 'mock-token-user') {
+      await fetchUser(token)
+    }
   }
 
   const value = {

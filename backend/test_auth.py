@@ -13,21 +13,30 @@ def test_config():
 
 def test_jwt_decode():
     """测试 JWT 解码"""
-    from app.auth import decode_supabase_token
+    from app.auth import decode_supabase_token, hash_password, verify_password, create_access_token
 
-    settings = get_settings()
-    if not settings.supabase_jwt_secret:
-        print("[SKIP] 跳过 JWT 测试：未配置 SUPABASE_JWT_SECRET")
-        return
+    # 1. 测试密码哈希与验证
+    password = "test-password-123"
+    hashed = hash_password(password)
+    assert verify_password(password, hashed) is True
+    assert verify_password("wrong-password", hashed) is False
+    print("[OK] 密码哈希与验证通过")
 
-    # 测试无效 token
+    # 2. 测试本地 JWT Token 生成与验证
+    user_data = {"sub": "user-uuid-123", "email": "test@example.com"}
+    token = create_access_token(user_data)
+    payload = decode_supabase_token(token)
+    assert payload.get("sub") == "user-uuid-123"
+    assert payload.get("email") == "test@example.com"
+    print("[OK] 本地 JWT 生成与解码验证通过")
+
+    # 3. 测试无效 token
     try:
         decode_supabase_token("invalid-token")
         print("[FAIL] 应该拒绝无效 token")
     except Exception as e:
         print("[OK] 正确拒绝无效 token")
 
-    print("\n提示：要测试有效 token，请使用前端登录后获取 token")
 
 if __name__ == "__main__":
     print("=== 认证功能测试 ===\n")
@@ -35,13 +44,7 @@ if __name__ == "__main__":
     print("1. 测试配置...")
     config_ok = test_config()
 
-    print("\n2. 测试 JWT 解码...")
+    print("\n2. 测试 JWT 和密码哈希...")
     test_jwt_decode()
 
     print("\n=== 测试完成 ===")
-    print("\n下一步：")
-    print("1. 配置 Supabase 环境变量")
-    print("2. 运行数据库迁移：python -m alembic upgrade head")
-    print("3. 启动后端：python start.py")
-    print("4. 启动前端：cd frontend && npm run dev")
-    print("5. 访问 http://localhost:3000/register 注册用户")

@@ -43,3 +43,34 @@ class SymptomCategoryResponse(BaseModel):
 
 class SymptomListResponse(BaseModel):
     categories: List[SymptomCategoryResponse]
+
+
+class UserRegister(BaseModel):
+    email: str = Field(..., description="邮箱")
+    password: str = Field(..., min_length=6, description="密码")
+
+
+class UserLogin(BaseModel):
+    email: str = Field(..., description="邮箱")
+    password: str = Field(..., min_length=6, description="密码")
+
+
+class ChangePasswordRequest(BaseModel):
+    password: str = Field(..., min_length=6, description="新密码")
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    is_active: bool
+    role: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse

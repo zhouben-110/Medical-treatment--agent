@@ -3,6 +3,8 @@
 import hmac
 import logging
 from typing import Optional
+from datetime import datetime, timedelta, timezone
+import bcrypt
 
 import httpx
 import jwt
@@ -17,6 +19,37 @@ from app.database import get_db
 from app.models import User
 
 logger = logging.getLogger(__name__)
+
+
+def hash_password(password: str) -> str:
+    """使用 bcrypt 哈希密码"""
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8')
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """验证 bcrypt 密码"""
+    if not hashed_password:
+        return False
+    pwd_bytes = plain_password.encode('utf-8')
+    hashed_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(pwd_bytes, hashed_bytes)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """创建本地 JWT Token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
+    to_encode.update({"exp": expire})
+    settings = get_settings()
+    secret = settings.jwt_secret or settings.supabase_jwt_secret or "fallback-secret"
+    encoded_jwt = jwt.encode(to_encode, secret, algorithm="HS256")
+    return encoded_jwt
 
 # API Key 认证（保留向后兼容）
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -75,23 +108,45 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
 
 
 def decode_supabase_token(token: str) -> dict:
-    """解码 Supabase JWT Token，支持 HS256 和 ES256 算法"""
+    """解码本地 JWT Token，并保留对 Supabase JWT (HS256/ES256) 的向后兼容"""
     settings = get_settings()
+    secret = settings.jwt_secret or settings.supabase_jwt_secret or "fallback-secret"
 
+    # 1. 尝试使用本地/对称密钥 HS256 解码
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={
+                "verify_aud": False,
+                "verify_exp": True,
+            },
+            leeway=10  # 允许10秒的时钟偏差
+        )
+        return payload
+    except jwt.exceptions.ExpiredSignatureError:
+        logger.warning("Token 已过期")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token 已过期",
+        )
+    except jwt.exceptions.InvalidTokenError:
+        # 本地解码失败，可能是 Supabase token (例如 ES256)
+        pass
+
+    # 2. 备用逻辑：如果是 Supabase Token，尝试使用 Supabase 密钥/JWKS 解密
     if not settings.supabase_jwt_secret and not settings.supabase_url:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="服务未正确配置：缺少 SUPABASE_JWT_SECRET 或 SUPABASE_URL",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的 Token",
         )
 
     try:
-        # 先查看 token 头部的算法
         header = jwt.get_unverified_header(token)
         alg = header.get("alg", "HS256")
-        logger.info(f"JWT 算法: {alg}, kid: {header.get('kid', 'N/A')}")
 
         if alg == "ES256":
-            # ES256: 使用 JWKS 公钥验证
             if not settings.supabase_url:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -117,10 +172,9 @@ def decode_supabase_token(token: str) -> dict:
                     "verify_aud": False,
                     "verify_exp": True,
                 },
-                leeway=10  # 允许10秒的时钟偏差
+                leeway=10
             )
         else:
-            # HS256: 使用 JWT Secret 验证
             if not settings.supabase_jwt_secret:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -134,7 +188,7 @@ def decode_supabase_token(token: str) -> dict:
                     "verify_aud": False,
                     "verify_exp": True,
                 },
-                leeway=10  # 允许10秒的时钟偏差
+                leeway=10
             )
         return payload
     except jwt.exceptions.ExpiredSignatureError as e:

@@ -64,7 +64,7 @@ redis-server
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env   # 编辑 .env 填入 DashScope API Key、Supabase 配置
+cp .env.example .env   # 编辑 .env 填入 DashScope API Key、JWT 配置
 alembic upgrade head   # 创建数据库表
 python -m medical_kb_mcp.seed_diseases   # 灌入 25 种疾病数据 + 自动生成 embedding（幂等）
 ```
@@ -84,7 +84,7 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local   # 编辑 .env.local 填入 Supabase 配置
+cp .env.example .env.local   # 编辑 .env.local 填入 API 代理配置
 npm run dev
 ```
 
@@ -92,8 +92,6 @@ npm run dev
 
 | 变量 | 用途 |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名密钥 |
 | `API_KEY` | 后端 API Key（服务端代理注入，不暴露到浏览器） |
 
 访问 http://localhost:3000
@@ -181,9 +179,10 @@ FastAPI lifespan (main.py:21)
 | `LANGCHAIN_PROJECT` | LangSmith 项目名 | `medical-agent` |
 | `MCP_HOST` / `MCP_PORT` | MCP server 监听地址（Claude Desktop 用） | `127.0.0.1` / `8765` |
 | `REDIS_URL` | Redis 连接串（缓存 + 限流 + 会话管理，可选） | `redis://localhost:6379/0` |
-| `SUPABASE_URL` | Supabase 项目 URL（用于 ES256 JWKS 获取） | `https://xxx.supabase.co` |
-| `SUPABASE_ANON_KEY` | Supabase 匿名密钥 | 必填（使用 Supabase 认证时） |
-| `SUPABASE_JWT_SECRET` | Supabase JWT 密钥（HS256 验证用） | Supabase Dashboard > Settings > API |
+| `JWT_SECRET` | 本地 JWT 签名密钥（HS256 验证用，安全性高） | 必填（可填写任意随机安全字符串） |
+| `SUPABASE_URL` | Supabase 项目 URL（仅用于向后兼容 ES256 解密，已弃用） | `https://xxx.supabase.co` |
+| `SUPABASE_ANON_KEY` | Supabase 匿名密钥（仅用于向后兼容，已弃用） | — |
+| `SUPABASE_JWT_SECRET` | Supabase JWT 密钥（仅用于向后兼容，已弃用） | — |
 
 ## 项目结构
 
@@ -197,7 +196,7 @@ backend/
 │   ├── state.py            # LangGraph 状态定义（含急诊及画像字段）
 │   ├── graph.py            # Supervisor 多 Agent 路由
 │   ├── main.py             # FastAPI 入口 + lifespan + /health
-│   ├── auth.py             # 认证模块（Supabase JWT HS256/ES256 + API Key）
+│   ├── auth.py             # 认证模块（本地 JWT + 密码哈希 + 兼容 Supabase JWT 及 API Key）
 │   ├── security.py         # 安全防护模块（Prompt 注入与越狱检查）
 │   ├── safety_rules.py     # 用药安全规则库（儿童、孕妇、过敏药红线拦截）
 │   ├── llm.py              # LLM 实例工厂（带缓存）
@@ -239,7 +238,7 @@ frontend/
 │   ├── app/                # Next.js 页面
 │   │   ├── login/          # 登录页
 │   │   └── register/       # 注册页
-│   ├── api/client.ts       # API 客户端（自动携带 Supabase JWT）
+│   ├── api/client.ts       # API 客户端（自动携带本地 JWT）
 │   ├── types/index.ts      # TypeScript 类型
 │   ├── hooks/              # 自定义 Hook
 │   │   ├── useChat.ts          # 聊天状态管理（支持更正/删除已识别症状）
@@ -251,8 +250,7 @@ frontend/
 │   ├── contexts/           # React Context
 │   │   └── AuthContext.tsx  # 认证状态管理
 │   └── lib/                # 工具库
-│       └── supabase.ts     # Supabase 客户端
-├── .env.local              # 环境变量（Supabase 配置）
+├── .env.local              # 环境变量（API 代理配置）
 └── next.config.js          # API 代理
 ```
 
@@ -450,7 +448,7 @@ python -m pytest evals/test_eval.py -v -s
 
 | 表 | 说明 |
 |---|---|
-| `users` | 用户（Supabase JWT 自动创建） |
+| `users` | 用户（本地注册或首次登录自动创建） |
 | `sessions` | 问诊会话 |
 | `messages` | 对话消息 |
 | `symptom_categories` | 症状分类 |
@@ -465,6 +463,7 @@ python -m pytest evals/test_eval.py -v -s
 |---|---|---|
 | POST | `/api/auth/login` | 邮箱密码登录 |
 | POST | `/api/auth/register` | 用户注册 |
+| POST | `/api/auth/change-password` | 修改用户密码 |
 | POST | `/api/chat` | 发送消息 |
 | POST | `/api/chat/stream` | SSE 流式对话 |
 | GET | `/api/history` | 会话列表 |
@@ -477,12 +476,13 @@ python -m pytest evals/test_eval.py -v -s
 
 系统支持两种认证方式：
 
-**1. Supabase JWT Token（主要方式）**
+**1. 本地 JWT Token（主要方式）**
 
-前端通过 Supabase 登录后，自动在请求头中携带 `Authorization: Bearer <token>`。后端支持 **HS256** 和 **ES256** 两种算法，自动根据 Token 头部的 `alg` 字段选择验证方式：
+前端通过本地注册登录后获取 JWT，并自动在请求头中携带 `Authorization: Bearer <token>`。后端使用本地 `JWT_SECRET` 进行 **HS256** 对称验证。
 
-- **HS256**：使用 `SUPABASE_JWT_SECRET` 直接验证
-- **ES256**：从 Supabase JWKS 端点 (`/auth/v1/.well-known/jwks.json`) 获取公钥验证
+同时也向下兼容 **Supabase JWT**，支持根据 Token 头部的 `alg` 字段自动验证：
+- **HS256**：使用 `SUPABASE_JWT_SECRET` 验证
+- **ES256**：从 Supabase JWKS 端点获取公钥验证
 
 **2. API Key（向后兼容）**
 
@@ -525,7 +525,7 @@ python -m pytest tests/test_symptom_analyzer_structured.py -v
 
 | 项 | 说明 | 影响 |
 |---|---|---|
-| Supabase JWT 算法 | Supabase 近期将 JWT 签名从 HS256 切换到 ES256，后端已支持自动识别两种算法 | 使用 ES256 时需配置 `SUPABASE_URL` 以获取 JWKS 公钥 |
+| Supabase JWT 兼容性 | 仅在需要兼容旧版 Supabase 登录时才配置相关参数；默认情况下，本地 JWT 机制全自动工作，无需外部依赖 | - |
 | Redis 可选 | Redis 用于缓存和限流，不启动时自动降级为无缓存模式，限流退化为进程内存级别 | 开发环境可不装 Redis，生产环境建议开启以获得最佳性能 |
 | 指南重新入库 | M1 删除了进程内入库逻辑，`vectors.py` 改为 `PGVector.from_existing_index` 读已存在集合；尚无 `data/guidelines/*.md` → `medical_guidelines` 的 ingest 脚本 | 全新空库下 `search_guidelines` 优雅降级为空结果，结构化疾病检索不受影响 |
 | 迁移残留 | `backend/chroma_db/`（ChromaDB→pgvector 遗留）、`medical_agent*.db`（SQLite→Postgres 遗留） | 建议加 `.gitignore` 或直接删除 |

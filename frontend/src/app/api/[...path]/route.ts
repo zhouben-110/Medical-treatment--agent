@@ -91,3 +91,19 @@ export async function DELETE(
   const { path } = await params;
   return proxy(request, path);
 }
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const { path } = await params;
+  return proxy(request, path);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const { path } = await params;
+  return proxy(request, path);
+}

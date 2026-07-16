@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_jwt_secret: str = ""  # 在 Supabase Dashboard > Settings > API > JWT Secret 获取
 
+    # 本地 JWT 配置
+    jwt_secret: str = "your-custom-jwt-secret-key-change-this-in-production"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

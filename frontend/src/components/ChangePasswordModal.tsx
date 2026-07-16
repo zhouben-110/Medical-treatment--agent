@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase'
+import { changePassword } from '@/api/client'
 
 interface ChangePasswordModalProps {
   isOpen: boolean
@@ -14,7 +14,6 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
-  const supabase = createClient()
 
   const resetForm = () => {
     setNewPassword('')
@@ -46,17 +45,14 @@ export default function ChangePasswordModal({ isOpen, onClose }: ChangePasswordM
 
     setLoading(true)
 
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword,
-    })
-
-    if (error) {
-      setError(`修改失败: ${error.message}`)
-      setLoading(false)
-    } else {
+    try {
+      await changePassword(newPassword)
       setSuccess(true)
       setLoading(false)
       setTimeout(() => handleClose(), 1500)
+    } catch (err: any) {
+      setError(`修改失败: ${err.message}`)
+      setLoading(false)
     }
   }
 

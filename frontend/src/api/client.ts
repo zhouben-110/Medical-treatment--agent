@@ -1,5 +1,4 @@
 import { ChatResponse, ChatStage, Session, StreamMeta, SymptomCategory } from '@/types';
-import { createClient } from '@/lib/supabase';
 
 const API_BASE = '/api';
 
@@ -20,25 +19,9 @@ async function getHeaders(): Promise<Record<string, string>> {
     'Content-Type': 'application/json',
   };
 
-  // 优先获取本地 Mock Token
-  const mockToken = getCookie('mock-access-token');
-  if (mockToken) {
-    headers['Authorization'] = `Bearer ${mockToken}`;
-    return headers;
-  }
-
-  // 获取 Supabase access token（带超时，防止 Supabase 不可达时卡住）
-  try {
-    const supabase = createClient();
-    const sessionPromise = supabase.auth.getSession();
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
-    const result = await Promise.race([sessionPromise, timeoutPromise]) as any;
-    const session = result?.data?.session;
-    if (session?.access_token) {
-      headers['Authorization'] = `Bearer ${session.access_token}`;
-    }
-  } catch (err) {
-    console.warn('Failed to get Supabase session:', err);
+  const token = getCookie('access-token');
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
 
   return headers;
@@ -317,5 +300,22 @@ export async function deleteUser(userId: string): Promise<void> {
   if (!response.ok) {
     const data = await response.json().catch(() => null);
     throw new Error(data?.detail || `操作失败 (${response.status})`);
+  }
+}
+
+export async function changePassword(password: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/auth/change-password`, {
+    method: 'POST',
+    headers: await getHeaders(),
+    body: JSON.stringify({ password }),
+  });
+
+  if (response.status === 401) {
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.detail || '修改密码失败');
   }
 }
