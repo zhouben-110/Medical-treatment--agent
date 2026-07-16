@@ -112,11 +112,22 @@ stateDiagram-v2
     Diagnose --> [*] : 输出诊断报告与建议
     Emergency --> [*]
 ```
+###  项目效果
+<img width="2474" height="1128" alt="Image" src="https://github.com/user-attachments/assets/682f164d-608a-444c-a0d9-520382a12a36" />
+
+<<<<<<< HEAD
+---
+
+## 📊 自动化评测 (E2E & CI)
+
+=======
+<img width="2219" height="1179" alt="Image" src="https://github.com/user-attachments/assets/6ae69600-04b0-4b80-85b4-3d396d916374" />
 
 ---
 
 ## 📊 自动化评测 (E2E & CI)
 
+>>>>>>> d5240a3 (jwt1)
 系统自带了一套评测引擎，内置 35 个真实问诊 Case，支持 Mock 模式（用于 CI）和 Real 模式（调用真实模型与 DB 评估）。
 
 ```bash
