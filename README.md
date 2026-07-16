@@ -1,532 +1,159 @@
-# 医疗健康助手
+# 🩺 医疗健康助手 (Medical Agent)
 
-AI 驱动的多 Agent 症状分析与治疗建议系统。基于 LangGraph Supervisor 模式实现多 Agent 协作，MCP 协议解耦知识层，Pydantic 结构化输出保证数据质量。疾病匹配使用 pgvector 语义相似度（DashScope embedding），支持同义词/近义词症状识别。
+AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGraph Supervisor** 模式实现多 Agent 协同，通过 **Model Context Protocol (MCP)** 对医疗知识层进行微服务级解耦，并基于 **pgvector (PostgreSQL)** 实现高精度的混合 RAG 检索，同时内置多维度的医疗用药安全红线拦截与生产级容灾防护。
 
-## 技术栈
+---
 
-### 后端
+## 🌟 核心特性
 
-| 技术 | 用途 |
-|---|---|
-| FastAPI | Web 框架 |
-| SQLAlchemy 2.x + asyncpg | 异步 ORM |
-| PostgreSQL 17 | 主数据库 |
-| pgvector 0.8.0 | 向量检索 |
-| Redis 5.x | 缓存 + 限流 + 会话管理 |
-| Alembic | 数据库迁移 |
-| LangGraph | 多 Agent 状态机 |
-| LangGraph Supervisor | Supervisor 多 Agent 编排 |
-| LangGraph Checkpoint Postgres | 对话状态持久化 |
-| Uvicorn | ASGI 服务器 |
+### 🤖 1. 多 Agent 协同编排 (LangGraph)
+采用 Supervisor 集中编排模式，将问诊拆分为四大原子 Agent 节点：
+* **急诊分诊 (Triage)**：前置 29 个红旗关键词零延迟过滤，结合 LLM 进行结构化急症判定，高危症状即刻触发 120 呼叫提示。
+* **症状提取 (Symptom Analyzer)**：基于 Pydantic 提取结构化症状，自动进行实体合并与排重，支持前端标签化交互修改。
+* **精准追问 (Questioner)**：根据现有症状库，自动追问持续时间、伴随症状、病史与过敏史，追问上限设为 5 轮，平衡体验与精度。
+* **诊断报告 (Diagnose & Advise)**：整合知识库 RAG 上下文，一键生成结构化诊断建议，避免多次 LLM 带来的延迟。
 
-### AI / RAG
+### 📚 2. MCP 知识微服务
+提供独立的 `medical_kb_mcp` 服务，解耦核心知识层：
+* **三个原子工具**：提供疾病匹配 (`search_diseases_by_symptoms`)、疾病详情 (`get_disease_detail`) 及指南语义检索 (`search_guidelines`)。
+* **双模式运行**：既支持 FastAPI 在进程内直接调用相关模块（无需启动独立进程），也支持挂载至 Claude Desktop（stdio 模式）独立演示。
 
-| 技术 | 用途 |
-|---|---|
-| DashScope API (qwen-plus) | LLM（OpenAI 兼容接口） |
-| DashScope text-embedding-v3 | 文本向量化（1024 维） |
-| LangChain | RAG 流程编排 |
-| langchain-postgres (PGVector) | 向量存储与检索 |
-| MCP (Model Context Protocol) | 知识层封装（Claude Desktop 通过 stdio 消费） |
-| Pydantic 结构化输出 | 症状提取 + 分诊输出 |
+### 🔍 3. RAG 检索算法优化
+* **密集与稀疏混合重排**：结合 pgvector 的 Cosine 相似度（占比 60%）和基于症状交集的 Dice 重叠系数（占比 40%）混合打分，兼顾语义理解与精准匹配。
+* **元数据拼接前置**：在向量写入前将文档标题与段落拼接（`来自《...》：...`），解决独立切片丢失疾病主语的缺陷。
+* **数据高保真**：去除了知识检索层对治疗详情和文献切片长度的硬性限制，确保 LLM 诊断能获取无损高保真的医学参考。
 
-### 前端
+### 🛡️ 4. 生产级安全与合规
+* **用药安全红线**：根据患者的年龄、孕产哺乳状态及过敏史，利用用药禁忌拦截器进行二次过滤，对不适用药物与过敏源输出醒目的强警示。
+* **全生命周期防护**：前置 Prompt 注入防护；敏感日志脫敏；数据库凭据解耦。
+* **双层鉴权**：本地 JWT (HS256) 与 API Key 双鉴权机制，实现 Session 级别的用户数据隔离。
 
-| 技术 | 用途 |
-|---|---|
-| Next.js 14 (App Router) | React 框架 |
-| React 18 + TypeScript | UI |
-| Tailwind CSS 3.3 | 样式 |
-| 原生 fetch + SSE | HTTP 与流式通信 |
+### ⚡ 5. 高性能与优雅降级
+* **二级缓存机制**：Redis 分层缓存诊断与检索结果；在 Redis 故障时，系统自动优雅降级为本地内存缓存（LRU 策略）。
+* **Fail-Closed 限流**：默认使用 Redis 滑动窗口限流；若 Redis 宕机，自动退化为内存级滑动窗口限流，确保系统不被刷爆。
 
-## 快速开始
+---
 
-### 1. PostgreSQL + pgvector
+## 🛠️ 技术栈
 
-确保 PostgreSQL 运行在 `localhost:5432`，然后：
+* **后端**：FastAPI / SQLAlchemy 2.x + asyncpg / Alembic / LangGraph (Supervisor) / Uvicorn
+* **AI & RAG**：DashScope (qwen-plus & text-embedding-v3) / pgvector 0.8.0 / MCP (Model Context Protocol)
+* **缓存限流**：Redis 5.x / 7.x
+* **前端**：Next.js 14 (App Router) / React 18 + TypeScript / Tailwind CSS / Server-Sent Events (SSE)
 
+---
+
+## 🚀 快速开始
+
+### 1. 数据库准备 (PostgreSQL)
+确保 PostgreSQL 已安装且开启了 `pgvector` 插件：
 ```sql
 CREATE DATABASE medical_agent;
 \c medical_agent
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 2. Redis
-
-确保 Redis 运行在 `localhost:6379`（可选，不启动则自动降级为无缓存模式）：
-
-```bash
-redis-server
-```
-
-### 3. 后端
-
+### 2. 后端启动
 ```bash
 cd backend
+# 安装依赖
 pip install -r requirements.txt
-cp .env.example .env   # 编辑 .env 填入 DashScope API Key、JWT 配置
-alembic upgrade head   # 创建数据库表
-python -m medical_kb_mcp.seed_diseases   # 灌入 25 种疾病数据 + 自动生成 embedding（幂等）
+# 配置文件 (填入 DashScope API Key, JWT 密钥等)
+cp .env.example .env
+# 数据库迁移
+alembic upgrade head
+# 灌入 25 种疾病种子数据 (自动计算并写入 embedding)
+python -m medical_kb_mcp.seed_diseases
+# 启动服务
+python start.py
 ```
+> 后端启动后将运行在 `http://localhost:8000`，可通过 `/health` 验证状态，在 `/docs` 查看交互式 Swagger 文档。
 
-> **首次启动**：后端启动时会自动创建 `users`、`sessions`、`messages` 等表（通过 `init_db()`）。若表已存在则跳过。
-
-> **关于指南向量库**：`search_guidelines` 读取**已存在**的 `medical_guidelines` 向量集合。全新空库下该集合为空，指南检索会**优雅降级为空结果**（结构化疾病检索不受影响）。重新 ingest `data/guidelines/*.md` 是 M1 之后的跟进项，详见 [`backend/medical_kb_mcp/README.md`](backend/medical_kb_mcp/README.md)。
-
-启动 FastAPI 应用：
-```bash
-uvicorn app.main:app --reload --port 8000
-# Windows 已在 app/main.py 顶部设置 SelectorEventLoop，直接 uvicorn 即可
-```
-
-### 4. 前端
-
+### 3. 前端启动
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local   # 编辑 .env.local 填入 API 代理配置
+cp .env.example .env.local
 npm run dev
 ```
+> 访问 `http://localhost:3000` 即可开始问诊体验。
 
-前端 `.env.local` 配置：
+### 4. 挂载 Claude Desktop (可选)
+复制 `claude_desktop_config.example.json` 内容至 Claude Desktop 配置中，将路径替换为绝对路径即可让 Claude 拥有本地医学库检索能力。详情参考：[MCP Server 运行指南](backend/medical_kb_mcp/README.md)。
 
-| 变量 | 用途 |
-|---|---|
-| `API_KEY` | 后端 API Key（服务端代理注入，不暴露到浏览器） |
+---
 
-访问 http://localhost:3000
+## 🔀 系统架构与工作流
 
-### 5. Claude Desktop 集成
-
-MCP Server 同时支持 stdio 模式，可直接挂载到 Claude Desktop：
-
-```json
-{
-  "mcpServers": {
-    "medical-kb": {
-      "command": "python",
-      "args": ["-m", "medical_kb_mcp.server"],
-      "cwd": "你的路径/backend"
-    }
-  }
-}
-```
-MCP 服务以 子进程 (stdio) 方式运行，不是一个独立的网络服务。
-
-启动链路：
-
-FastAPI lifespan (main.py:21)
-  └─ mcp_client.load_tools()           # main.py:31
-       └─ MultiServerMCPClient({
-            "medical_kb": {
-              "transport": "stdio",          ← 子进程方式
-              "command": sys.executable,     ← 当前 Python 解释器
-              "args": ["-m", "medical_kb_mcp.server", "stdio"]
-            }
-          })
-
-实际效果： FastAPI 启动时，langchain-mcp-adapters 会用当前 Python 解释器 fork 一个子进程 运行 python -m medical_kb_mcp.server stdio，然后通过 stdin/stdout 进行 JSON-RPC 通信。
-
-┌──────────────────────┐     stdio (stdin/stdout)     ┌─────────────────────────┐
-│  FastAPI 主进程       │  ◄──────────────────────►   │  medical_kb_mcp 子进程   │
-│  mcp_client.py       │     JSON-RPC over stdio      │  server.py (FastMCP)    │
-│  retriever.py        │                               │  db.py / vectors.py     │
-└──────────────────────┘                               └─────────────────────────┘
-
-2. 原理：MCP 的工具注册与调用
-
-服务端 (medical_kb_mcp/server.py) 用 FastMCP 注册了 3 个工具：
-
-┌─────────────────────────────┬──────────────────┬───────────────────────────────────────┐
-│           工具名            │       功能       │                数据源                 │
-├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
-│ search_diseases_by_symptoms │ 根据症状匹配疾病 │ Postgres + pgvector 余弦相似度        │
-├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
-│ get_disease_detail          │ 查疾病详情       │ Postgres 精确/模糊查询                │
-├─────────────────────────────┼──────────────────┼───────────────────────────────────────┤
-│ search_guidelines           │ 语义检索诊疗指南 │ pgvector 向量库 + DashScope embedding │
-└─────────────────────────────┴──────────────────┴───────────────────────────────────────┘
-
-客户端 (app/mcp_client.py) 调用 await _client.get_tools() 拿到 LangChain Tool 对象列表，之后 retriever.py 通过 tool.ainvoke(args) 调用这些远程工具。
-
-3. 是否真的被使用？
-
-是的，确实被使用了。 整个调用链完整且活跃：
-
-1. main.py:31 — tools = await load_tools() 启动时加载
-2. main.py:32 — retriever = MedicalRetriever(tools) 组装 retriever
-3. main.py:33 — _da_mod.retriever = retriever 注入到诊断节点
-4. diagnose_and_advise.py:46 — retriever.retrieve_for_diagnosis(symptoms) 调用 MCP 工具做疾病匹配
-5. diagnose_and_advise.py:54 — retriever.retrieve_for_advice(disease_names, symptoms) 调用 MCP 工具获取治疗方案
-## 环境变量
-
-后端配置全部走 `backend/.env`（复制自 `.env.example`）：
-
-| 变量 | 用途 | 默认 / 示例 |
-|---|---|---|
-| `LLM_API_KEY` | DashScope API Key（LLM 与嵌入共用） | 必填 |
-| `LLM_MODEL` | 对话模型 | `qwen-plus` |
-| `LLM_BASE_URL` | LLM OpenAI 兼容端点 | DashScope compatible-mode |
-| `DATABASE_URL` | Postgres 连接串（asyncpg 驱动） | `postgresql+asyncpg://...:5432/medical_agent` |
-| `EMBEDDING_MODEL` | 嵌入模型（1024 维） | `text-embedding-v3` |
-| `EMBEDDING_BASE_URL` | 嵌入端点 | DashScope compatible-mode |
-| `DATA_DIR` | 指南 `.md` 数据目录 | `./data` |
-| `API_KEY` | API 鉴权密钥（向后兼容，主要使用 Supabase JWT） | — |
-| `CORS_ORIGINS` | 允许的前端来源（逗号分隔） | `http://localhost:3000,...` |
-| `SQL_ECHO` | 是否打印 SQL | `false` |
-| `LANGCHAIN_TRACING_V2` | 开启 LangSmith 追踪 | `false` |
-| `LANGCHAIN_API_KEY` | LangSmith Key | — |
-| `LANGCHAIN_PROJECT` | LangSmith 项目名 | `medical-agent` |
-| `MCP_HOST` / `MCP_PORT` | MCP server 监听地址（Claude Desktop 用） | `127.0.0.1` / `8765` |
-| `REDIS_URL` | Redis 连接串（缓存 + 限流 + 会话管理，可选） | `redis://localhost:6379/0` |
-| `JWT_SECRET` | 本地 JWT 签名密钥（HS256 验证用，安全性高） | 必填（可填写任意随机安全字符串） |
-| `SUPABASE_URL` | Supabase 项目 URL（仅用于向后兼容 ES256 解密，已弃用） | `https://xxx.supabase.co` |
-| `SUPABASE_ANON_KEY` | Supabase 匿名密钥（仅用于向后兼容，已弃用） | — |
-| `SUPABASE_JWT_SECRET` | Supabase JWT 密钥（仅用于向后兼容，已弃用） | — |
-
-## 项目结构
-
-```
-backend/
-├── app/
-│   ├── config.py           # Pydantic Settings 配置
-│   ├── database.py         # SQLAlchemy 异步引擎
-│   ├── models.py           # ORM 模型（5 张业务表）
-│   ├── schemas.py          # Pydantic 请求/响应模型
-│   ├── state.py            # LangGraph 状态定义（含急诊及画像字段）
-│   ├── graph.py            # Supervisor 多 Agent 路由
-│   ├── main.py             # FastAPI 入口 + lifespan + /health
-│   ├── auth.py             # 认证模块（本地 JWT + 密码哈希 + 兼容 Supabase JWT 及 API Key）
-│   ├── security.py         # 安全防护模块（Prompt 注入与越狱检查）
-│   ├── safety_rules.py     # 用药安全规则库（儿童、孕妇、过敏药红线拦截）
-│   ├── llm.py              # LLM 实例工厂（带缓存）
-│   ├── redis.py            # Redis 客户端（缓存 + 限流 + 会话管理，降级为内存滑动窗口）
-│   ├── summarizer.py       # 对话摘要机制（>12 条消息触发）
-│   ├── cache.py            # 诊断结果缓存（内存，Redis 不可用时兜底）
-│   ├── nodes/              # Agent 节点
-│   │   ├── triage.py           # 分诊/急诊 Agent（确定性红旗检测 + LLM）
-│   │   ├── symptom_analyzer.py # 症状提取（Pydantic 结构化输出）
-│   │   ├── questioner.py       # 追问 Agent
-│   │   ├── disease_matcher.py  # 疾病匹配（结构化 JSON + 缓存）
-│   │   ├── advisor.py          # 治疗建议 Agent
-│   │   └── diagnose_and_advise.py # 诊断+建议合并节点
-│   ├── rag/                # RAG 检索（直接调用知识层函数）
-│   │   └── retriever.py        # 调 medical_kb_mcp → 拼 context
-│   └── routers/            # API 路由
-│       ├── chat.py         # 对话（含 SSE 流式 + 进度事件）
-│       ├── history.py      # 历史记录
-│       └── symptoms.py     # 症状列表
-├── medical_kb_mcp/         # 独立 MCP Server（可独立部署）
-│   ├── server.py           # FastMCP 应用 + 3 个原子工具
-│   ├── db.py               # Postgres 疾病表访问（embedding 语义匹配）
-│   ├── vectors.py          # pgvector + DashScope 嵌入
-│   ├── models.py           # Disease ORM 模型
-│   ├── config.py           # MCPSettings（读同一 .env）
-│   └── seed_diseases.py    # 25 种疾病种子数据
-├── start.py                # 启动脚本（单进程启动 FastAPI）
-├── evals/                  # Eval 工具
-│   ├── dataset.py          # 35 个 eval case（25 正常 + 5 急诊 + 5 模糊）
-│   ├── runner.py           # eval 执行引擎（mock / real 两种模式）
-│   ├── metrics.py          # 指标计算（命中率/追问轮数/急症召回率）
-│   └── test_eval.py        # pytest 集成
-├── alembic/                # 数据库迁移
-├── data/guidelines/        # 医学指南（9 篇 .md）
-└── requirements.txt
-
-frontend/
-├── src/
-│   ├── app/                # Next.js 页面
-│   │   ├── login/          # 登录页
-│   │   └── register/       # 注册页
-│   ├── api/client.ts       # API 客户端（自动携带本地 JWT）
-│   ├── types/index.ts      # TypeScript 类型
-│   ├── hooks/              # 自定义 Hook
-│   │   ├── useChat.ts          # 聊天状态管理（支持更正/删除已识别症状）
-│   │   └── useSession.ts       # 会话管理
-│   ├── components/         # UI 组件
-│   │   ├── UserNav.tsx     # 用户导航（登录/登出）
-│   │   ├── SymptomTags.tsx     # 症状标签展示（带交互删除更正按钮）
-│   │   └── ProgressIndicator.tsx # 步骤进度指示器（分诊、提取、检索、建议进度可视化）
-│   ├── contexts/           # React Context
-│   │   └── AuthContext.tsx  # 认证状态管理
-│   └── lib/                # 工具库
-├── .env.local              # 环境变量（API 代理配置）
-└── next.config.js          # API 代理
-```
-
-## 多 Agent 架构（M2）
-
-系统采用 **Supervisor 多 Agent 模式**，每个 Agent 有明确职责：
-
-### 系统工作流程图
-
+### 架构拓扑
 ```mermaid
-flowchart TD
-    User([用户输入症状]) --> FE[前端 ChatWindow]
-    FE -->|POST /api/chat/stream| API[FastAPI chat.py]
-
-    API --> EnsureSession[创建/恢复会话 + 记录消息]
-    EnsureSession --> BuildInput[构建 LangGraph 状态]
-    BuildInput --> Graph[LangGraph StateGraph]
-
-    subgraph LangGraph["LangGraph 状态机"]
-        Supervisor{{"Supervisor (入口)"}}
-        Triage["Triage 分诊"]
-        Analyze["Analyze 症状提取"]
-        Question["Question 追问"]
-        Diagnose["Diagnose 诊断+建议"]
-
-        Supervisor -->|"stage=start"| Triage
-        Supervisor -->|"stage=triaged"| Analyze
-        Supervisor -->|"stage=analyzing: LLM决策"| NeedInfo{需要更多信息?}
-        NeedInfo -->|"是 & turns < 5"| Question
-        NeedInfo -->|"否 | turns ≥ 5"| Diagnose
-        Supervisor -->|"stage=questioning"| Diagnose
-
-        Triage -->|"紧急"| Emergency([急救提示: 拨打120])
-        Triage -->|"正常: stage=triaged"| Supervisor
-        Analyze -->|"stage=analyzing"| Supervisor
-        Question -->|"stage=questioning"| WaitUser([等待用户回复...])
-        WaitUser -->|"用户回复"| Supervisor
-        Diagnose -->|"stage=completed"| Result([输出诊断结果])
+graph LR
+    User([用户]) <--> NextJS[Next.js 前端]
+    NextJS <--> FastAPI[FastAPI 后端]
+    subgraph FastAPI_Backend [FastAPI 后端]
+        LangGraph[LangGraph 状态机] <--> MCP[MCP Client]
+        Redis[(Redis 缓存/限流)]
     end
-
-    subgraph TriageDetail["Triage 分诊逻辑"]
-        T1["Layer 1: 红旗关键词匹配<br/>29个危险信号 (零延迟)"]
-        T2["Layer 2: LLM TriageResult<br/>结构化输出"]
-        T1 -->|命中| Emergency
-        T1 -->|未命中| T2
-        T2 -->|紧急| Emergency
-        T2 -->|正常| Continue
+    subgraph Knowledge_Layer [独立知识层 (MCP Server)]
+        MCPServer[MCP Server] --> DB[(PostgreSQL + pgvector)]
     end
-
-    subgraph DiagnoseDetail["Diagnose 诊断流程"]
-        D0{"Redis 缓存?"}
-        D1["Step 1: retrieve_for_diagnosis"]
-        D2["Step 2: retrieve_for_advice"]
-        D3["Step 3: LLM 生成诊断报告"]
-        D0 -->|"命中"| D3
-        D0 -->|"未命中"| D1
-        D1 --> D2 --> D3
-    end
-
-    Triage -.-> TriageDetail
-    Diagnose -.-> DiagnoseDetail
-
-    subgraph RAG["RAG 检索 (asyncio.gather 并行)"]
-        RC{"工具缓存?"}
-        MCP1["MCP: search_diseases_by_symptoms<br/>pgvector cosine 语义匹配"]
-        MCP2["MCP: search_guidelines<br/>医学指南向量检索"]
-        MCP3["MCP: get_disease_detail<br/>疾病详情查询"]
-        RC -->|命中| CacheHit["返回缓存"]
-        RC -->|未命中| MCP1
-    end
-
-    D1 -->|"并行调用"| RC
-    D1 -->|"并行调用"| MCP2
-    D2 -->|"并行调用"| MCP3
-    D2 -->|"并行调用"| MCP2
-
-    MCP1 --> DB[(PostgreSQL + pgvector)]
-    MCP2 --> DB
-    MCP3 --> DB
-
-    CacheHit --> D2
-
-    Result -->|SSE events| FE
-    Emergency -->|SSE events| FE
+    MCP <--> MCPServer
 ```
 
-### 状态流转说明
-
+### 状态流转图
 ```mermaid
 stateDiagram-v2
-    [*] --> start: 新会话
-    start --> triaged: Triage 完成 (正常)
-    start --> emergency: Triage 检出紧急
-    triaged --> analyzing: SymptomAnalyzer 提取症状
-    analyzing --> questioning: 需要更多信息 (turns < 5)
-    analyzing --> completed: 信息充足 / turns ≥ 5
-    questioning --> analyzing: 用户回复后重新分析
-    questioning --> completed: turns ≥ 5 强制诊断
-    completed --> [*]
-    emergency --> [*]
+    [*] --> Triage : 用户输入症状
+    Triage --> Emergency : 检出紧急信号 (呼叫 120)
+    Triage --> Analyze : 正常 (提取症状)
+    Analyze --> Question : 信息不足 (追问)
+    Question --> Analyze : 用户回复 (重新分析)
+    Analyze --> Diagnose : 信息充足 / 追问已达 5 轮
+    Diagnose --> [*] : 输出诊断报告与建议
+    Emergency --> [*]
 ```
 
-### 节点职责
+---
 
-| Agent | 职责 | 技术特点 |
-|---|---|---|
-| **Supervisor** | 路由决策 | 确定性路由（基于 stage）+ LLM 兜底（仅 analyzing 阶段），LangSmith 可见 |
-| **Triage** | 急诊检测 | Layer 1: 确定性红旗关键词（29 个，零延迟）+ Layer 2: LLM `TriageResult` 结构化输出 |
-| **Analyze** | 症状提取 | Pydantic `SymptomExtraction` 结构化输出，自动去重合并已有症状 |
-| **Question** | 追问 | 最多 5 轮，聚焦: 症状持续时间/伴随症状/病史/过敏史 |
-| **Diagnose** | 诊断+建议 | MCP RAG 检索（并行）→ LLM 一次性生成完整报告 |
+## 📊 自动化评测 (E2E & CI)
 
-### 关键设计决策
-
-1. **确定性优先**: Supervisor 在 4/5 个路由点使用确定性判断，仅在 `analyzing` 阶段引入 LLM 决策（是否需要追问），减少延迟和幻觉风险
-2. **双层急诊检测**: Triage 先做零延迟关键词匹配，命中即短路；未命中才调 LLM，兼顾速度和覆盖率
-3. **合并诊断节点**: `diagnose_and_advise` 将疾病匹配和治疗建议合并为单节点单次 LLM 调用，减少延迟
-4. **并行 RAG**: `asyncio.gather` 同时发起疾病匹配和指南检索，最大化吞吐
-5. **状态持久化**: `AsyncPostgresSaver` 实现多轮对话状态持久化，会话可跨服务重启恢复
-6. **Redis 多级缓存**: 诊断结果（P0）+ 向量检索结果（P1a）双层缓存，Redis → 内存 dict 降级链；Redis 不可用时系统行为等同改造前
-7. **Redis 滑动窗口限流与内存兜底**: 默认使用 Redis 实现滑动窗口限流以支持多 Worker 状态共享，若 Redis 不可用，则自动安全降级至基于 Python 内存的滑动窗口限流（Fail-Closed 兜底思想），防止接口被暴力刷爆。
-8. **安全防线与用药红线拦截**: 前置基于关键词与正则过滤的 Prompt 注入防御。在症状提取阶段（Symptom Analyzer）自动感知并维护患者属性画像（年龄段、孕产哺乳状态、过敏史），在诊断生成阶段（Diagnose & Advise）利用用药禁忌拦截器对敏感药物和过敏源进行二次检测与强警示注入，弥补大模型临床安全缺陷。
-
-## MCP Server（M1）
-
-`medical_kb_mcp` 包提供 3 个原子工具，App 侧直接函数调用，Claude Desktop 通过 stdio 消费：
-
-| 工具 | 用途 |
-|---|---|
-| `search_diseases_by_symptoms` | 症状→疾病匹配（pgvector cosine 语义相似度） |
-| `get_disease_detail` | 疾病详情查询 |
-| `search_guidelines` | 医学指南语义检索（pgvector + DashScope） |
-
-App 侧直接调用 `medical_kb_mcp.db` / `vectors` 模块的函数，无需启动独立进程。Claude Desktop 通过 stdio 模式挂载（见下方集成配置）。
-
-### MCP 工具契约
-
-| 工具 | 入参 | 返回 |
-|---|---|---|
-| `search_diseases_by_symptoms` | `symptoms: list[str]`, `limit: int` | `list[DiseaseMatch]`（pgvector cosine 相似度排序） |
-| `get_disease_detail` | `name: str` | `DiseaseDetail \| None` |
-| `search_guidelines` | `query: str`, `k: int` | `list[GuidelineChunk]` |
-
-### 数据流
-
-```
-diagnose 节点 ─┐                              ┌─ Redis RAG 缓存 (mc:rag:*)
-              ├─► diagnose_and_advise ────────┤
-advise 节点  ─┘         │                     └─ 内存缓存兜底
-                        ▼
-              app/rag/retriever.py ── Redis 工具缓存 (mc:tool:*) ──┐  (asyncio.gather 并行)
-                        │    (直接函数调用)                         │
-                        ├─► medical_kb_mcp.db    ─► pgvector(diseases 表, cosine 相似度)
-                        └─► medical_kb_mcp.vectors ─► pgvector(guidelines 集合)
-
-Claude Desktop ─(stdio)──► medical_kb_mcp.server ─┘
-```
-
-## RAG 优化：密集与稀疏混合检索 + 上下文拼接
-
-在原有的 pgvector Cosine 密集向量检索基础上，进一步优化了 RAG 知识检索层：
-
-1. **密集与稀疏混合重排 (Dense-Sparse Hybrid Scoring)**：
-   在匹配可能疾病时，同时使用 pgvector 的 Cosine 相似度（占比 60%）和基于症状交集的 Dice 重叠系数（占比 40%）进行混合打分并重排候选结果，从而保证在语义理解的同时，兼顾精确关键字命中的准确性。
-2. **元数据上下文拼接 (Metadata Context Prepending)**：
-   在 `seed_guidelines.py` 灌库时，将文档标题前置拼接在 chunk 文本前（格式为 `"来自《{g['title']}》：{chunk}"`），有效避免单独切片丢失疾病主语，显著提高了向量相似匹配度。
-3. **防止切片冗余与清空重写**：
-   在 `seed_guidelines.py` 中引入清库拦截，在重新写入前，利用 psycopg 自动删除该 collection 里的老切片，防止重复执行脚本产生的大量垃圾冗余向量。
-4. **消除检索上下文截断**：
-   移除了 [retriever.py](file:///C:/Users/Administrator/Desktop/医疗agent/backend/app/rag/retriever.py) 中对疾病治疗详情（原 120 字）和文献切片长度（原 150 字）的限制，为下游 LLM 决策输出完整、无损的高保真医学参考指南。
-- 阈值过滤：`SIMILARITY_THRESHOLD = 0.3`
-- `matched_symptoms` 交集信息保留作为辅助参考
-- Seed 自动生成：新疾病插入时生成 embedding，已有疾病 `symptom_embedding` 为 None 时自动补算
-- 检索并行化：`retriever.py` 中结构化匹配与向量检索用 `asyncio.gather` 并行
-
-## Eval 工具（M3）
+系统自带了一套评测引擎，内置 35 个真实问诊 Case，支持 Mock 模式（用于 CI）和 Real 模式（调用真实模型与 DB 评估）。
 
 ```bash
 cd backend
+# 运行评估单测
 python -m pytest evals/test_eval.py -v -s
 ```
 
-四个核心指标：
+### 核心评估指标
+* 🎯 **诊断命中率** (目标 ≥60%，当前 **92.0%**)：Top-3 结果中是否包含目标疾病。
+* 🔄 **平均追问轮数** (目标 <3.0，当前 **0.7 轮**)：到达诊断阶段前，Questioner 节点执行的平均次数。
+* 🚨 **急症召回率** (目标 100%，当前 **100.0%**)：急症患者被正确分类为紧急的比例。
+* 🔍 **急症精确度** (目标 100%，当前 **100.0%**)：被分类为紧急的患者中，真正属于急症的比例。
 
-| 指标 | 计算方式 | 当前值 | 目标 |
-|---|---|---|---|
-| 诊断命中率 | expected_disease ∈ Top-3 results | 92.0% | ≥60% |
-| 平均追问轮数 | start→diagnose 间的 question 节点数 | 0.7 | <3.0 |
-| 急症召回率 | emergency case 中被正确检出的比例 | 100.0% | 100% |
-| 急症精确度 | 被检出为急诊中真正急诊的比例 | 100.0% | 100% |
+---
 
-支持 mock（快速 CI）和 real（完整 E2E）两种模式。
+## 📂 项目结构
 
-## 数据库
-
-| 表 | 说明 |
-|---|---|
-| `users` | 用户（本地注册或首次登录自动创建） |
-| `sessions` | 问诊会话 |
-| `messages` | 对话消息 |
-| `symptom_categories` | 症状分类 |
-| `symptoms` | 症状 |
-| `diseases` | 疾病知识库（25 种，含症状 embedding，MCP Server 管理） |
-| `langchain_pg_*` | pgvector 向量数据 |
-| `checkpoints*` | LangGraph 状态 |
-
-## API
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/auth/login` | 邮箱密码登录 |
-| POST | `/api/auth/register` | 用户注册 |
-| POST | `/api/auth/change-password` | 修改用户密码 |
-| POST | `/api/chat` | 发送消息 |
-| POST | `/api/chat/stream` | SSE 流式对话 |
-| GET | `/api/history` | 会话列表 |
-| GET | `/api/history/{id}` | 会话详情 |
-| DELETE | `/api/history/{id}` | 删除会话 |
-| GET | `/api/symptoms` | 症状分类 |
-| GET | `/health` | 健康检查（数据库/连接池/LangGraph/缓存/Redis/活跃会话） |
-
-### 鉴权
-
-系统支持两种认证方式：
-
-**1. 本地 JWT Token（主要方式）**
-
-前端通过本地注册登录后获取 JWT，并自动在请求头中携带 `Authorization: Bearer <token>`。后端使用本地 `JWT_SECRET` 进行 **HS256** 对称验证。
-
-同时也向下兼容 **Supabase JWT**，支持根据 Token 头部的 `alg` 字段自动验证：
-- **HS256**：使用 `SUPABASE_JWT_SECRET` 验证
-- **ES256**：从 Supabase JWKS 端点获取公钥验证
-
-**2. API Key（向后兼容）**
-
-通过请求头 `X-API-Key` 校验（值取 `.env` 的 `API_KEY`）。
-
-```bash
-curl -H "Authorization: Bearer <supabase-jwt>" http://localhost:8000/api/symptoms
-curl -H "X-API-Key: $API_KEY" http://localhost:8000/api/symptoms
 ```
-
-## 测试
-
-```bash
-cd backend
-
-# 全量测试（不含需要数据库的 API/集成测试）
-python -m pytest tests/ -v --ignore=tests/test_api.py --ignore=tests/test_integration.py
-
-# Eval 测试
-python -m pytest evals/test_eval.py -v -s
-
-# 单独模块测试
-python -m pytest tests/test_triage.py -v
-python -m pytest tests/test_symptom_analyzer_structured.py -v
+.
+├── backend/
+│   ├── app/                    # FastAPI 核心业务代码
+│   │   ├── nodes/              # LangGraph Agent 节点 (Triage/Analyze/Questioner/Diagnose)
+│   │   ├── routers/            # API 端点 (SSE 问诊、历史记录)
+│   │   ├── rag/                # RAG 检索层
+│   │   ├── safety_rules.py     # 用药安全校验拦截器
+│   │   └── security.py         # Prompt 注入防护与安全净化
+│   ├── medical_kb_mcp/         # 独立 MCP Server (含 pgvector 疾病/指南检索逻辑)
+│   ├── evals/                  # 评测用例集与运行引擎
+│   ├── alembic/                # 数据库迁移脚本
+│   ├── data/guidelines/        # 诊疗指南 Markdown 数据源
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── app/                # Next.js 页面与路由
+│   │   ├── components/         # 问诊状态机 UI 组件 (进度指示、症状更正标签)
+│   │   └── api/client.ts       # 前端 API 客户端 (本地 JWT 自动附带)
+│   └── next.config.js
+└── docker-compose.yml           # 一键集成部署配置
 ```
-
-### 测试覆盖
-
-| 模块 | 测试文件 | 测试数 |
-|---|---|---|
-| Triage Agent | `tests/test_triage.py` | 16 |
-| Symptom Analyzer | `tests/test_symptom_analyzer_structured.py` | 8 |
-| MCP Server | `tests/test_mcp_*.py` | 11 |
-| Eval | `evals/test_eval.py` | 9 |
-| **总计** | | **44** |
-
-> 上表为业务 / MCP / Eval 单测，不含 `tests/test_api.py`(4) 与 `tests/test_integration.py`(1)——这两个文件默认失败（需 `X-API-Key` 鉴权 + asyncpg 事件循环问题），属环境依赖而非回归，故未计入。
-
-## 已知限制
-
-| 项 | 说明 | 影响 |
-|---|---|---|
-| Supabase JWT 兼容性 | 仅在需要兼容旧版 Supabase 登录时才配置相关参数；默认情况下，本地 JWT 机制全自动工作，无需外部依赖 | - |
-| Redis 可选 | Redis 用于缓存和限流，不启动时自动降级为无缓存模式，限流退化为进程内存级别 | 开发环境可不装 Redis，生产环境建议开启以获得最佳性能 |
-| 指南重新入库 | M1 删除了进程内入库逻辑，`vectors.py` 改为 `PGVector.from_existing_index` 读已存在集合；尚无 `data/guidelines/*.md` → `medical_guidelines` 的 ingest 脚本 | 全新空库下 `search_guidelines` 优雅降级为空结果，结构化疾病检索不受影响 |
-| 迁移残留 | `backend/chroma_db/`（ChromaDB→pgvector 遗留）、`medical_agent*.db`（SQLite→Postgres 遗留） | 建议加 `.gitignore` 或直接删除 |
-| Real-mode eval 前置 | `runner.py` 的 real 模式需 live Postgres + DashScope；CI 走 mock 模式 | 完整 E2E 指标需本地起全套依赖才能复现 |
