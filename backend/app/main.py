@@ -1,5 +1,12 @@
 import sys
+import os
 import asyncio
+
+# 将 backend 根目录注入 sys.path 和环境变量 PYTHONPATH，确保 stdio 子进程可以顺利导入 medical_kb_mcp 模块
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+os.environ["PYTHONPATH"] = backend_dir + (os.path.pathsep + os.environ.get("PYTHONPATH", "") if os.environ.get("PYTHONPATH") else "")
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

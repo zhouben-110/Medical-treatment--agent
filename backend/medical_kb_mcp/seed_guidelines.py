@@ -388,7 +388,7 @@ GUIDELINES: list[dict] = [
 
 
 async def seed_guidelines() -> int:
-    """将指南文本切片后写入 pgvector。幂等：每次运行追加，不会删除已有数据。"""
+    """将指南文本切片后写入 pgvector。清空该 Collection 中的旧数据后重新灌入，避免重复。"""
     settings = get_mcp_settings()
 
     splitter = RecursiveCharacterTextSplitter(
@@ -402,13 +402,32 @@ async def seed_guidelines() -> int:
     for g in GUIDELINES:
         chunks = splitter.split_text(g["text"])
         for chunk in chunks:
-            all_texts.append(chunk)
+            # 前置拼接文档标题，确保检索时携带疾病主语上下文，防止语义丢失
+            chunk_content = f"来自《{g['title']}》：{chunk}"
+            all_texts.append(chunk_content)
             all_metadatas.append({"source": g["title"]})
 
     if not all_texts:
         logger.warning("No guideline texts to seed.")
         return 0
 
+    # 1. 在写入前，使用 psycopg 同步连接清空已有数据，防止多次运行产生重复 chunk
+    import psycopg
+    try:
+        with psycopg.connect(settings.psycopg_url) as conn:
+            with conn.cursor() as cur:
+                # 寻找 Collection UUID
+                cur.execute("SELECT uuid FROM langchain_pg_collection WHERE name = %s;", (COLLECTION_NAME,))
+                row = cur.fetchone()
+                if row:
+                    coll_uuid = row[0]
+                    cur.execute("DELETE FROM langchain_pg_embedding WHERE collection_id = %s;", (coll_uuid,))
+                    conn.commit()
+                    logger.info("Cleared %s existing chunks for collection '%s'.", row, COLLECTION_NAME)
+    except Exception as e:
+        logger.warning("Could not clear existing guidelines collection (will append instead): %s", e)
+
+    # 2. 初始化 PGVector 存储并写入新文本
     store = PGVector.from_existing_index(
         embedding=get_embeddings(),
         collection_name=COLLECTION_NAME,

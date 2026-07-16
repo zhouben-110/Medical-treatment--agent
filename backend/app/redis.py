@@ -84,11 +84,33 @@ def make_symptom_key(symptoms: list[str], prefix: str = "diag") -> str:
 
 # ── 滑动窗口限流 ──────────────────────────────────────────────
 
+from collections import defaultdict
+import asyncio
+
+_mem_rate_limit: dict[str, list[float]] = defaultdict(list)
+_mem_lock = asyncio.Lock()
+
+
+async def check_rate_limit_memory(key: str, limit: int, window: int = 60) -> bool:
+    """内存滑动窗口限流，用作 Redis 故障时的降级兜底"""
+    async with _mem_lock:
+        now = time.time()
+        cutoff = now - window
+        timestamps = _mem_rate_limit[key]
+        valid_ts = [ts for ts in timestamps if ts > cutoff]
+        _mem_rate_limit[key] = valid_ts
+        if len(valid_ts) >= limit:
+            return False
+        valid_ts.append(now)
+        return True
+
+
 async def check_rate_limit(key: str, limit: int, window: int = 60) -> bool:
-    """滑动窗口限流。返回 True 表示允许，False 表示超限。Redis 不可用时放行"""
+    """滑动窗口限流。返回 True 表示允许，False 表示超限。Redis 不可用时降级为内存限流"""
     r = get_redis()
     if r is None:
-        return True
+        logger.warning("Redis 客户端未连接，降级为内存限流")
+        return await check_rate_limit_memory(key, limit, window)
     try:
         now = time.time()
         member = f"{now}:{id(object())}"
@@ -100,8 +122,9 @@ async def check_rate_limit(key: str, limit: int, window: int = 60) -> bool:
         results = await pipe.execute()
         count = results[1]
         return count < limit
-    except Exception:
-        return True
+    except Exception as e:
+        logger.warning("Redis 限流操作失败，降级为内存限流: %s", e)
+        return await check_rate_limit_memory(key, limit, window)
 
 
 # ── 会话状态缓存 ──────────────────────────────────────────────

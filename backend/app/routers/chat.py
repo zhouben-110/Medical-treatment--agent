@@ -12,6 +12,7 @@ from app.redis import (
     get_cached_session_state, cache_session_state, invalidate_session_cache,
     track_session,
 )
+from app.security import check_prompt_injection
 import json
 import logging
 
@@ -74,6 +75,7 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool, current
             "is_emergency": False,
             "red_flags": [],
             "emergency_message": "",
+            "patient_profile": {"age_group": None, "is_pregnant": None, "allergies": []},
         }
     # 诊断完成后用户继续提问，重置状态开启新一轮诊断
     if current_stage == "completed":
@@ -81,6 +83,7 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool, current
         old_symptoms = prev_state.get("symptoms", []) if prev_state else []
         old_diseases = prev_state.get("possible_diseases", []) if prev_state else []
         old_treatment = prev_state.get("treatment_plan", "") if prev_state else ""
+        old_profile = prev_state.get("patient_profile", {"age_group": None, "is_pregnant": None, "allergies": []}) if prev_state else {"age_group": None, "is_pregnant": None, "allergies": []}
         return {
             "messages": [{"role": "user", "content": user_message}],
             "symptoms": old_symptoms,  # 保留已识别症状
@@ -93,6 +96,7 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool, current
             "is_emergency": False,
             "red_flags": [],
             "emergency_message": "",
+            "patient_profile": old_profile,
             "_reset_context": True,  # 标记需要清理旧上下文
         }
     return {"messages": [{"role": "user", "content": user_message}]}
@@ -153,6 +157,7 @@ async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession, u
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(rate_limit_chat)])
 async def chat(request: Request, body: ChatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    check_prompt_injection(body.message)
     session = await _ensure_session_and_log_user(body, db, user.id)
     session_id = str(session.id)
     await track_session(session_id)
@@ -211,6 +216,7 @@ async def chat(request: Request, body: ChatRequest, user: User = Depends(get_cur
 
 @router.post("/chat/stream", dependencies=[Depends(rate_limit_chat)])
 async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    check_prompt_injection(body.message)
     try:
         session = await _ensure_session_and_log_user(body, db, user.id)
         session_id = str(session.id)
@@ -294,3 +300,30 @@ async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(
             yield f"data: {json.dumps({'type': 'error', 'content': 'Server error'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+from pydantic import BaseModel
+
+
+class UpdateSymptomsRequest(BaseModel):
+    session_id: str
+    symptoms: list[str]
+
+
+@router.post("/chat/symptoms/update")
+async def update_symptoms(body: UpdateSymptomsRequest, user: User = Depends(get_current_user)):
+    session_id = body.session_id
+    cfg = {"configurable": {"thread_id": session_id}}
+
+    st = await graph_module.medical_graph.aget_state(cfg)
+    if not st or st.values is None:
+        raise HTTPException(status_code=404, detail="未找到会话或状态")
+
+    import asyncio
+    await asyncio.to_thread(
+        graph_module.medical_graph.update_state,
+        cfg,
+        {"symptoms": body.symptoms}
+    )
+    await invalidate_session_cache(session_id)
+    return {"ok": True, "symptoms": body.symptoms}

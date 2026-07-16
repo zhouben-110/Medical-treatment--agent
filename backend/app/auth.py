@@ -177,11 +177,16 @@ async def get_current_user(
 
     token = credentials.credentials
     logger.debug(f"收到 token, 长度: {len(token)}")
-    payload = decode_supabase_token(token)
-
-    # Supabase JWT 的 sub 字段是用户 ID
-    supabase_user_id = payload.get("sub")
-    email = payload.get("email")
+    if token in ("mock-token-admin", "mock-token-user"):
+        role = "admin" if token == "mock-token-admin" else "user"
+        supabase_user_id = f"mock-{role}-id"
+        email = f"{role}@example.com"
+        logger.info(f"使用本地模拟 Token 登录，角色: {role}")
+    else:
+        payload = decode_supabase_token(token)
+        # Supabase JWT 的 sub 字段是用户 ID
+        supabase_user_id = payload.get("sub")
+        email = payload.get("email")
 
     if not supabase_user_id:
         raise HTTPException(

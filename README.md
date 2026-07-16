@@ -194,12 +194,14 @@ backend/
 │   ├── database.py         # SQLAlchemy 异步引擎
 │   ├── models.py           # ORM 模型（5 张业务表）
 │   ├── schemas.py          # Pydantic 请求/响应模型
-│   ├── state.py            # LangGraph 状态定义（含急诊字段）
+│   ├── state.py            # LangGraph 状态定义（含急诊及画像字段）
 │   ├── graph.py            # Supervisor 多 Agent 路由
 │   ├── main.py             # FastAPI 入口 + lifespan + /health
 │   ├── auth.py             # 认证模块（Supabase JWT HS256/ES256 + API Key）
+│   ├── security.py         # 安全防护模块（Prompt 注入与越狱检查）
+│   ├── safety_rules.py     # 用药安全规则库（儿童、孕妇、过敏药红线拦截）
 │   ├── llm.py              # LLM 实例工厂（带缓存）
-│   ├── redis.py            # Redis 客户端（缓存 + 限流 + 会话管理，自动降级）
+│   ├── redis.py            # Redis 客户端（缓存 + 限流 + 会话管理，降级为内存滑动窗口）
 │   ├── summarizer.py       # 对话摘要机制（>12 条消息触发）
 │   ├── cache.py            # 诊断结果缓存（内存，Redis 不可用时兜底）
 │   ├── nodes/              # Agent 节点
@@ -240,10 +242,12 @@ frontend/
 │   ├── api/client.ts       # API 客户端（自动携带 Supabase JWT）
 │   ├── types/index.ts      # TypeScript 类型
 │   ├── hooks/              # 自定义 Hook
-│   │   ├── useChat.ts          # 聊天状态管理
+│   │   ├── useChat.ts          # 聊天状态管理（支持更正/删除已识别症状）
 │   │   └── useSession.ts       # 会话管理
 │   ├── components/         # UI 组件
-│   │   └── UserNav.tsx     # 用户导航（登录/登出）
+│   │   ├── UserNav.tsx     # 用户导航（登录/登出）
+│   │   ├── SymptomTags.tsx     # 症状标签展示（带交互删除更正按钮）
+│   │   └── ProgressIndicator.tsx # 步骤进度指示器（分诊、提取、检索、建议进度可视化）
 │   ├── contexts/           # React Context
 │   │   └── AuthContext.tsx  # 认证状态管理
 │   └── lib/                # 工具库
@@ -369,7 +373,8 @@ stateDiagram-v2
 4. **并行 RAG**: `asyncio.gather` 同时发起疾病匹配和指南检索，最大化吞吐
 5. **状态持久化**: `AsyncPostgresSaver` 实现多轮对话状态持久化，会话可跨服务重启恢复
 6. **Redis 多级缓存**: 诊断结果（P0）+ 向量检索结果（P1a）双层缓存，Redis → 内存 dict 降级链；Redis 不可用时系统行为等同改造前
-7. **Redis 滑动窗口限流**: 替换 slowapi 进程内存限流，支持多 worker 共享状态，fail-open 设计保证可用性
+7. **Redis 滑动窗口限流与内存兜底**: 默认使用 Redis 实现滑动窗口限流以支持多 Worker 状态共享，若 Redis 不可用，则自动安全降级至基于 Python 内存的滑动窗口限流（Fail-Closed 兜底思想），防止接口被暴力刷爆。
+8. **安全防线与用药红线拦截**: 前置基于关键词与正则过滤的 Prompt 注入防御。在症状提取阶段（Symptom Analyzer）自动感知并维护患者属性画像（年龄段、孕产哺乳状态、过敏史），在诊断生成阶段（Diagnose & Advise）利用用药禁忌拦截器对敏感药物和过敏源进行二次检测与强警示注入，弥补大模型临床安全缺陷。
 
 ## MCP Server（M1）
 
@@ -406,17 +411,18 @@ advise 节点  ─┘         │                     └─ 内存缓存兜底
 Claude Desktop ─(stdio)──► medical_kb_mcp.server ─┘
 ```
 
-## RAG 优化：Embedding 语义匹配
+## RAG 优化：密集与稀疏混合检索 + 上下文拼接
 
-M1 的疾病症状匹配使用 PostgreSQL `overlap` + Dice 系数，只做精确字符串匹配。`"头疼"` 和 `"头痛"` 被视为完全不同的症状。
+在原有的 pgvector Cosine 密集向量检索基础上，进一步优化了 RAG 知识检索层：
 
-重构后改为 **pgvector cosine 语义相似度**（DashScope `text-embedding-v3`，1024 维）：
-
-| 阶段 | 操作 |
-|---|---|
-| 写入 | `"、".join(疾病症状)` → DashScope embedding → `symptom_embedding` 列 |
-| 查询 | `"、".join(用户症状)` → DashScope embedding → pgvector cosine 搜索 |
-
+1. **密集与稀疏混合重排 (Dense-Sparse Hybrid Scoring)**：
+   在匹配可能疾病时，同时使用 pgvector 的 Cosine 相似度（占比 60%）和基于症状交集的 Dice 重叠系数（占比 40%）进行混合打分并重排候选结果，从而保证在语义理解的同时，兼顾精确关键字命中的准确性。
+2. **元数据上下文拼接 (Metadata Context Prepending)**：
+   在 `seed_guidelines.py` 灌库时，将文档标题前置拼接在 chunk 文本前（格式为 `"来自《{g['title']}》：{chunk}"`），有效避免单独切片丢失疾病主语，显著提高了向量相似匹配度。
+3. **防止切片冗余与清空重写**：
+   在 `seed_guidelines.py` 中引入清库拦截，在重新写入前，利用 psycopg 自动删除该 collection 里的老切片，防止重复执行脚本产生的大量垃圾冗余向量。
+4. **消除检索上下文截断**：
+   移除了 [retriever.py](file:///C:/Users/Administrator/Desktop/医疗agent/backend/app/rag/retriever.py) 中对疾病治疗详情（原 120 字）和文献切片长度（原 150 字）的限制，为下游 LLM 决策输出完整、无损的高保真医学参考指南。
 - 阈值过滤：`SIMILARITY_THRESHOLD = 0.3`
 - `matched_symptoms` 交集信息保留作为辅助参考
 - Seed 自动生成：新疾病插入时生成 embedding，已有疾病 `symptom_embedding` 为 None 时自动补算

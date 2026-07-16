@@ -9,6 +9,7 @@ import { SymptomCategory } from '@/types';
 import MessageBubble from './MessageBubble';
 import SymptomTags from './SymptomTags';
 import Sidebar from './Sidebar';
+import ProgressIndicator from './ProgressIndicator';
 
 export default function ChatWindow() {
   const [input, setInput] = useState('');
@@ -23,7 +24,7 @@ export default function ChatWindow() {
 
   const {
     messages, loading, symptoms, needMoreInfo,
-    messagesEndRef, sendMessage, resetChat, loadMessages,
+    messagesEndRef, sendMessage, resetChat, loadMessages, removeSymptom,
   } = useChat(currentSessionId, (id) => setCurrentSessionId(id));
 
   // 加载症状分类
@@ -149,8 +150,13 @@ export default function ChatWindow() {
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
-          {symptoms.length > 0 && <SymptomTags symptoms={symptoms} />}
-          {loading && (
+          {symptoms.length > 0 && (
+            <SymptomTags symptoms={symptoms} onRemoveSymptom={removeSymptom} />
+          )}
+          {loading && (!messages[messages.length - 1]?.content) && (
+            <ProgressIndicator />
+          )}
+          {loading && (messages[messages.length - 1]?.content) && (
             <div className="flex justify-start mb-4">
               <div className="bg-gray-200 dark:bg-gray-700 p-3 rounded-lg rounded-bl-none">
                 <div className="flex space-x-2">

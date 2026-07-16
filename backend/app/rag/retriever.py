@@ -81,14 +81,15 @@ class MedicalRetriever:
             lines = ["【知识库匹配】"]
             for i, d in enumerate(diseases[:3], 1):
                 disease_names.append(d['name'])
-                desc = d['description'][:80]
-                lines.append(f"{i}. {d['name']}（{d['match_score']*100:.0f}%，{d['severity']}）{desc}")
+                desc = d['description'].strip()
+                lines.append(f"{i}. {d['name']}（混合评分: {d['match_score']:.2f}，严重度: {d['severity']}）：{desc}")
             parts.append("\n".join(lines))
 
         if chunks:
-            lines = ["【文献参考】"]
+            lines = ["【诊疗指南文献参考】"]
             for i, c in enumerate(chunks[:2], 1):
-                lines.append(f"{i}. {c['text'][:120].strip()}")
+                # 原文较短，保留完整切片，不进行截断
+                lines.append(f"{i}. {c['text'].strip()}")
             parts.append("\n".join(lines))
 
         return "\n".join(parts) if parts else "", disease_names
@@ -110,17 +111,20 @@ class MedicalRetriever:
             detail = details[0] if details else None
             if detail:
                 parts.append("\n".join([
-                    f"【{detail['name']}】（{detail['severity']}）",
-                    f"治疗：{detail['treatment'][:120]}",
-                    f"就医指征：{detail['when_to_see_doctor'][:80]}",
+                    f"【{detail['name']}】（严重度: {detail['severity']}）",
+                    f"典型症状：{'、'.join(detail['symptoms'])}",
+                    f"疾病简述：{detail['description']}",
+                    f"治疗方案：{detail['treatment']}",
+                    f"就医指征：{detail['when_to_see_doctor']}",
                 ]))
 
         if guideline_coro:
             chunks = results[len(top_diseases)]
             if chunks:
-                lines = ["【文献】"]
+                lines = ["【诊疗指南文献】"]
                 for i, c in enumerate(chunks[:2], 1):
-                    lines.append(f"{i}. {c['text'][:150].strip()}")
+                    # 保留完整切片内容，提供高保真建议参考
+                    lines.append(f"{i}. {c['text'].strip()}")
                 parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

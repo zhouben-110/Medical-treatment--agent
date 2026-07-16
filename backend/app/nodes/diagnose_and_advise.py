@@ -5,6 +5,7 @@ from app.state import MedicalAgentState
 from app.llm import get_llm
 from app.redis import cache_get, cache_set, make_symptom_key
 from app.cache import get_cached_diagnosis, cache_diagnosis
+from app.safety_rules import intercept_contraindications
 
 # 由 main.py lifespan 注入
 retriever = None
@@ -83,6 +84,8 @@ async def diagnose_and_advise(state: MedicalAgentState) -> dict:
         "medical_context": full_context or "（无相关知识库数据）",
     })
     advice = response.content
+    # 用药安全红线拦截与提示注入
+    advice = intercept_contraindications(advice, state.get("patient_profile"))
 
     return {
         "possible_diseases": disease_names,

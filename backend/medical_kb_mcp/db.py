@@ -57,33 +57,42 @@ async def search_diseases_by_symptoms(symptoms: list[str], limit: int = 5) -> li
     user_set = set(cleaned)
 
     async with _get_sessionmaker()() as session:
-        # 只查有 embedding 的疾病，按 cosine 距离排序
+        # 获取更多候选疾病，在内存中进行混合打分重排
         distance = Disease.symptom_embedding.cosine_distance(query_embedding)
         stmt = (
             select(Disease, distance.label("dist"))
             .where(Disease.symptom_embedding.isnot(None))
             .order_by(distance)
-            .limit(limit)
+            .limit(30)
         )
         rows = (await session.execute(stmt)).all()
 
     matches: list[DiseaseMatch] = []
     for d, dist in rows:
         similarity = 1 - dist
-        if similarity < SIMILARITY_THRESHOLD:
-            continue
-        # 保留交集信息作为辅助参考
         dset = set(d.symptoms)
         inter = user_set & dset
+        
+        # 计算 Dice 稀疏重叠系数 (0-1)
+        dice = 2 * len(inter) / (len(user_set) + len(dset)) if (user_set and dset) else 0.0
+        
+        # 混合打分：60% 密集向量相似度 + 40% 稀疏关键词匹配系数
+        hybrid_score = 0.6 * similarity + 0.4 * dice
+        
+        if hybrid_score < SIMILARITY_THRESHOLD:
+            continue
+            
         matches.append(DiseaseMatch(
             name=d.name,
             matched_symptoms=sorted(inter),
-            match_score=round(similarity, 2),
+            match_score=round(hybrid_score, 2),
             severity=d.severity,
             description=d.description,
         ))
 
-    return matches
+    # 按混合得分降序排列，取前 limit 个
+    matches.sort(key=lambda m: m.match_score, reverse=True)
+    return matches[:limit]
 
 
 async def get_disease_detail(name: str) -> DiseaseDetail | None:

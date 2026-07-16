@@ -23,3 +23,5 @@ class MedicalAgentState(TypedDict):
     is_emergency: bool
     red_flags: List[str]
     emergency_message: str
+    # ── M3: 患者属性与用药红线 ──
+    patient_profile: dict  # 格式: {"age_group": str|None, "is_pregnant": bool|None, "allergies": list[str]}

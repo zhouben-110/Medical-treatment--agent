@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { ChatStage, Message } from '@/types';
-import { sendMessageStream } from '@/api/client';
+import { sendMessageStream, updateSymptoms } from '@/api/client';
 import { randomUUID } from '@/lib/uuid';
 
 export function useChat(sessionId: string | undefined, onSessionCreated: (id: string) => void) {
@@ -104,6 +104,17 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
     setNeedMoreInfo(false);
   };
 
+  const removeSymptom = async (symptomToDelete: string) => {
+    if (!sessionId) return;
+    const updated = symptoms.filter((s) => s !== symptomToDelete);
+    try {
+      await updateSymptoms(sessionId, updated);
+      setSymptoms(updated);
+    } catch (err) {
+      console.error('Failed to delete symptom tag:', err);
+    }
+  };
+
   return {
     messages,
     loading,
@@ -113,5 +124,6 @@ export function useChat(sessionId: string | undefined, onSessionCreated: (id: st
     sendMessage,
     resetChat,
     loadMessages,
+    removeSymptom,
   };
 }
