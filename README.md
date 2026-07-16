@@ -90,15 +90,14 @@ npm run dev
 graph LR
     User([用户]) <--> NextJS[Next.js 前端]
     NextJS <--> FastAPI[FastAPI 后端]
-    subgraph FastAPI_Backend [FastAPI 后端]
+    subgraph FastAPI_Backend ["FastAPI 后端"]
         LangGraph[LangGraph 状态机] <--> MCP[MCP Client]
-        Redis[(Redis 缓存/限流)]
+        Redis[("Redis 缓存/限流")]
     end
-    subgraph Knowledge_Layer [独立知识层 (MCP Server)]
-        MCPServer[MCP Server] --> DB[(PostgreSQL + pgvector)]
+    subgraph Knowledge_Layer ["独立知识层 (MCP Server)"]
+        MCPServer[MCP Server] --> DB[("PostgreSQL + pgvector")]
     end
     MCP <--> MCPServer
-```
 
 ### 状态流转图
 ```mermaid
@@ -113,17 +112,10 @@ stateDiagram-v2
     Emergency --> [*]
 ```
 ###  项目效果
+
+<img width="2219" height="1179" alt="Image" src="https://github.com/user-attachments/assets/6ae69600-04b0-4b80-85b4-3d396d916374" />
 <img width="2474" height="1128" alt="Image" src="https://github.com/user-attachments/assets/682f164d-608a-444c-a0d9-520382a12a36" />
 
-<<<<<<< HEAD
----
-
-## 📊 自动化评测 (E2E & CI)
-
-=======
-<img width="2219" height="1179" alt="Image" src="https://github.com/user-attachments/assets/6ae69600-04b0-4b80-85b4-3d396d916374" />
-
----
 
 ## 📊 自动化评测 (E2E & CI)
 
