@@ -14,7 +14,7 @@ function getCookie(name: string) {
   return null;
 }
 
-async function getHeaders(): Promise<Record<string, string>> {
+export async function getHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };

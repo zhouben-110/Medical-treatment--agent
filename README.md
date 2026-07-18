@@ -32,6 +32,11 @@ AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGra
 * **二级缓存机制**：Redis 分层缓存诊断与检索结果；在 Redis 故障时，系统自动优雅降级为本地内存缓存（LRU 策略）。
 * **Fail-Closed 限流**：默认使用 Redis 滑动窗口限流；若 Redis 宕机，自动退化为内存级滑动窗口限流，确保系统不被刷爆。
 
+### 🗃️ 6. 动态知识库管理平台 (KB Management)
+* **疾病库 CRUD**：支持对疾病条目、典型症状、就医指征的在线增删改查。症状更新时自动重算 1024 维语义特征向量。
+* **指南自动切片导入**：支持长篇诊疗指南导入，以段落（`\n\n`）为粒度自动切片并提取来源元数据进行批量向量化写入。
+* **RAG 检索评测沙箱**：在管理后台提供测试界面，直观比对和调试 Cosine 语义相关性分值与 Dice 症状重叠系数。
+
 ---
 
 ## 🛠️ 技术栈
@@ -115,7 +120,7 @@ stateDiagram-v2
 
 <img width="2219" height="1179" alt="Image" src="https://github.com/user-attachments/assets/6ae69600-04b0-4b80-85b4-3d396d916374" />
 <img width="2474" height="1128" alt="Image" src="https://github.com/user-attachments/assets/682f164d-608a-444c-a0d9-520382a12a36" />
-
+<img width="2514" height="1204" alt="Image" src="https://github.com/user-attachments/assets/f433d9fc-3a71-4379-aa18-fed72327f43d" />
 
 ## 📊 自动化评测 (E2E & CI)
 
@@ -139,10 +144,11 @@ python -m pytest evals/test_eval.py -v -s
 
 ```
 .
+├── 知识库设计.md               # 动态知识库管理与 RAG 架构设计文档
 ├── backend/
 │   ├── app/                    # FastAPI 核心业务代码
 │   │   ├── nodes/              # LangGraph Agent 节点 (Triage/Analyze/Questioner/Diagnose)
-│   │   ├── routers/            # API 端点 (SSE 问诊、历史记录)
+│   │   ├── routers/            # API 端点 (问诊、历史、用户管理、知识库管理 kb.py)
 │   │   ├── rag/                # RAG 检索层
 │   │   ├── safety_rules.py     # 用药安全校验拦截器
 │   │   └── security.py         # Prompt 注入防护与安全净化
@@ -153,9 +159,9 @@ python -m pytest evals/test_eval.py -v -s
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── app/                # Next.js 页面与路由
+│   │   ├── app/                # Next.js 页面与路由 (包含 /admin/kb 知识库管理面板)
 │   │   ├── components/         # 问诊状态机 UI 组件 (进度指示、症状更正标签)
-│   │   └── api/client.ts       # 前端 API 客户端 (本地 JWT 自动附带)
+│   │   ├── api/                # 前端 API 客户端 (client.ts & kb.ts)
 │   └── next.config.js
 └── docker-compose.yml           # 一键集成部署配置
 ```

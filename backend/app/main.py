@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app import graph as graph_module
-from app.routers import chat, history, symptoms, auth, admin
+from app.routers import chat, history, symptoms, auth, admin, kb
 from app.database import init_db
 from app.config import get_settings
 from app.redis import init_redis, close_redis, check_rate_limit
@@ -68,7 +68,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "PUT"],
+    allow_methods=["GET", "POST", "DELETE", "PUT", "PATCH"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
@@ -77,6 +77,7 @@ app.include_router(history.router, prefix="/api")
 app.include_router(symptoms.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(kb.router, prefix="/api")
 
 
 @app.get("/")
