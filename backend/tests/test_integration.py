@@ -14,7 +14,11 @@ from app.main import app
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": "Bearer mock-token-user"}
+    ) as ac:
         yield ac
 
 
@@ -48,16 +52,25 @@ async def test_full_diagnosis_flow(client):
         "treatment_plan": "多休息、多喝水，如症状加重请及时就医",
     }
 
-    # aget_state 在两次请求里各调用一次：第一次新会话 created_at=None,
-    # 第二次续聊 created_at 是个时间戳
-    snapshots = iter([
-        _snap(created_at=None),
-        _snap(created_at=datetime.now()),
-    ])
+    call_count = 0
+    def aget_state_side_effect(*a, **kw):
+        nonlocal call_count
+        if call_count == 0:
+            call_count += 1
+            return _snap(created_at=None)
+        return _snap(
+            created_at=datetime.now(),
+            values={
+                "current_stage": "questioning",
+                "symptoms": ["头痛", "发烧"],
+                "messages": [ai_question]
+            }
+        )
+
     results = iter([round1, round2])
 
     with patch("app.graph.medical_graph") as mock_graph:
-        mock_graph.aget_state = AsyncMock(side_effect=lambda *a, **kw: next(snapshots))
+        mock_graph.aget_state = AsyncMock(side_effect=aget_state_side_effect)
         mock_graph.ainvoke = AsyncMock(side_effect=lambda *a, **kw: next(results))
 
         # 第一轮：发送症状

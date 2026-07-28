@@ -1,11 +1,14 @@
 """Combined diagnosis + advice node: single LLM call for streaming advice."""
 
+import logging
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
 from app.redis import cache_get, cache_set, make_symptom_key
 from app.cache import get_cached_diagnosis, cache_diagnosis
 from app.safety_rules import intercept_contraindications
+
+logger = logging.getLogger(__name__)
 
 # 由 main.py lifespan 注入
 retriever = None
@@ -46,7 +49,7 @@ async def diagnose_and_advise(state: MedicalAgentState) -> dict:
             try:
                 diagnosis_context, disease_names = await retriever.retrieve_for_diagnosis(symptoms)
             except Exception as e:
-                print(f"RAG retrieval error: {e}")
+                logger.error(f"RAG retrieval for diagnosis failed: {e}", exc_info=True)
 
         # 第二步：MCP 疾病详情检索（治疗方案、就医指征等）
         detail_context = ""
@@ -54,7 +57,7 @@ async def diagnose_and_advise(state: MedicalAgentState) -> dict:
             try:
                 detail_context = await retriever.retrieve_for_advice(disease_names, symptoms)
             except Exception as e:
-                print(f"RAG retrieval error for details: {e}")
+                logger.error(f"RAG retrieval for details failed: {e}", exc_info=True)
 
         # 写入缓存
         payload = {"diagnosis_context": diagnosis_context, "disease_names": disease_names, "detail_context": detail_context}

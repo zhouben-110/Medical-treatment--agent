@@ -30,16 +30,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_redis(settings.redis_url)
 
-    from app.mcp_client import load_tools
+    # 注入共享 DB sessionmaker，让 medical_kb_mcp 复用主应用的连接池
+    from medical_kb_mcp.db import set_sessionmaker
+    from app.database import async_session
+    set_sessionmaker(async_session)
+
     from app.rag.retriever import MedicalRetriever
     import app.nodes.diagnose_and_advise as _da_mod
 
-    try:
-        tools = await load_tools()
-        retriever = MedicalRetriever(tools)
-        _da_mod.retriever = retriever
-    except Exception as e:
-        print(f"Warning: MCP retriever init failed, running without RAG: {e}")
+    retriever = MedicalRetriever()
+    _da_mod.retriever = retriever
 
     async with AsyncExitStack() as stack:
         stack.push_async_callback(close_redis)

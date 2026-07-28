@@ -7,8 +7,15 @@ class Settings(BaseSettings):
     app_name: str = "Medical Agent"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/medical_agent"
     llm_api_key: str = ""
+    llm_api_keys: str = ""  # 逗号分隔的 Key 列表，支持随机轮询
     llm_model: str = "qwen-plus"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    
+    # 灾备大模型配置
+    llm_fallback_api_key: str = ""
+    llm_fallback_model: str = "qwen-turbo"
+    llm_fallback_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
     embedding_model: str = "text-embedding-v3"
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     data_dir: str = "./data"

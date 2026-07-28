@@ -1,69 +1,98 @@
-"""Client-side orchestrator: calls atomic MCP tools, assembles medical_context."""
+"""Client-side orchestrator: directly calls Medical-KB functions (no MCP transport)."""
 
+import logging
 import asyncio
 import hashlib
 import json
-from app.mcp_client import get_tool
+from app.services.kb_service import (
+    search_diseases_by_symptoms,
+    get_disease_detail,
+    search_guidelines,
+)
 from app.redis import cache_get, cache_set
 
-TOOL_TIMEOUT = 10  # seconds per MCP tool call
+logger = logging.getLogger(__name__)
 
-
-def _parse_tool_result(raw) -> list:
-    """Normalize langchain-mcp-adapters output into a list of dict items.
-
-    The adapter returns a list of content blocks — ``[{'type':'text','text':<json>}, ...]`` —
-    one block per item the tool returned, or ``[]`` when there are no results. We also
-    tolerate a raw JSON string or already-parsed data for robustness across versions.
-    """
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else [parsed]
-    if isinstance(raw, list):
-        items = []
-        for el in raw:
-            if isinstance(el, dict) and el.get("type") == "text" and "text" in el:
-                items.append(json.loads(el["text"]))
-            else:
-                items.append(el)
-        return items
-    return [raw]
+TOOL_TIMEOUT = 10  # seconds per call
 
 
 class MedicalRetriever:
-    """Builds prompt context by composing the Medical-KB MCP tools."""
+    """Builds prompt context by composing Medical-KB functions directly (in-process)."""
 
-    def __init__(self, tools: list):
-        self.tools = tools or []
-
-    async def _call(self, name: str, args: dict) -> list:
-        # 检查 Redis 缓存
+    async def _search_diseases_cached(self, symptoms: list[str], limit: int = 5) -> list[dict]:
+        """Call search_diseases_by_symptoms with Redis caching."""
         args_hash = hashlib.sha256(
-            json.dumps(args, sort_keys=True, ensure_ascii=False).encode()
+            json.dumps({"symptoms": symptoms, "limit": limit}, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:16]
-        cache_key = f"mc:tool:{name}:{args_hash}"
+        cache_key = f"mc:tool:search_diseases_by_symptoms:{args_hash}"
         cached = await cache_get(cache_key)
         if cached is not None:
             return cached
 
-        tool = get_tool(self.tools, name)
-        if tool is None:
-            return []
         try:
-            raw = await asyncio.wait_for(tool.ainvoke(args), timeout=TOOL_TIMEOUT)
-            result = _parse_tool_result(raw)
+            matches = await asyncio.wait_for(
+                search_diseases_by_symptoms(symptoms, limit), timeout=TOOL_TIMEOUT
+            )
+            result = [m.model_dump() for m in matches]
         except asyncio.TimeoutError:
-            print(f"[retriever] tool {name} timed out after {TOOL_TIMEOUT}s")
+            logger.warning(f"[retriever] search_diseases timed out after {TOOL_TIMEOUT}s")
             return []
         except Exception as e:
-            print(f"[retriever] tool {name} failed: {e}")
+            logger.error(f"[retriever] search_diseases failed: {e}", exc_info=True)
             return []
 
         if result:
-            ttl = 86400 if name == "get_disease_detail" else 3600
-            await cache_set(cache_key, result, ttl=ttl)
+            await cache_set(cache_key, result, ttl=3600)
+        return result
+
+    async def _get_detail_cached(self, name: str) -> dict | None:
+        """Call get_disease_detail with Redis caching."""
+        args_hash = hashlib.sha256(name.encode()).hexdigest()[:16]
+        cache_key = f"mc:tool:get_disease_detail:{args_hash}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            detail = await asyncio.wait_for(
+                get_disease_detail(name), timeout=TOOL_TIMEOUT
+            )
+            result = detail.model_dump() if detail else None
+        except asyncio.TimeoutError:
+            logger.warning(f"[retriever] get_disease_detail timed out after {TOOL_TIMEOUT}s")
+            return None
+        except Exception as e:
+            logger.error(f"[retriever] get_disease_detail failed: {e}", exc_info=True)
+            return None
+
+        if result:
+            await cache_set(cache_key, result, ttl=86400)
+        return result
+
+    async def _search_guidelines_cached(self, query: str, k: int = 3) -> list[dict]:
+        """Call search_guidelines with Redis caching."""
+        args_hash = hashlib.sha256(
+            json.dumps({"query": query, "k": k}, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()[:16]
+        cache_key = f"mc:tool:search_guidelines:{args_hash}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            chunks = await asyncio.wait_for(
+                search_guidelines(query, k), timeout=TOOL_TIMEOUT
+            )
+            result = [c.model_dump() for c in chunks]
+        except asyncio.TimeoutError:
+            logger.warning(f"[retriever] search_guidelines timed out after {TOOL_TIMEOUT}s")
+            return []
+        except Exception as e:
+            logger.error(f"[retriever] search_guidelines failed: {e}", exc_info=True)
+            return []
+
+        if result:
+            await cache_set(cache_key, result, ttl=3600)
         return result
 
     async def retrieve_for_diagnosis(self, symptoms: list[str]) -> tuple[str, list[str]]:
@@ -72,8 +101,8 @@ class MedicalRetriever:
         query = "症状：" + "、".join(symptoms) + " 可能的疾病"
 
         diseases, chunks = await asyncio.gather(
-            self._call("search_diseases_by_symptoms", {"symptoms": symptoms, "limit": 3}),
-            self._call("search_guidelines", {"query": query, "k": 2}),
+            self._search_diseases_cached(symptoms, 3),
+            self._search_guidelines_cached(query, 2),
         )
 
         disease_names = []
@@ -88,7 +117,6 @@ class MedicalRetriever:
         if chunks:
             lines = ["【诊疗指南文献参考】"]
             for i, c in enumerate(chunks[:2], 1):
-                # 原文较短，保留完整切片，不进行截断
                 lines.append(f"{i}. {c['text'].strip()}")
             parts.append("\n".join(lines))
 
@@ -99,16 +127,15 @@ class MedicalRetriever:
         top_diseases = diseases[:3]
 
         # 疾病详情和文献检索全部并行
-        detail_coros = [self._call("get_disease_detail", {"name": n}) for n in top_diseases]
+        detail_coros = [self._get_detail_cached(n) for n in top_diseases]
         merged = " ".join(f"{d} 治疗 用药 注意事项" for d in top_diseases[:2])
-        guideline_coro = self._call("search_guidelines", {"query": merged, "k": 3}) if top_diseases else None
+        guideline_coro = self._search_guidelines_cached(merged, 3) if top_diseases else None
 
         all_coros = detail_coros + ([guideline_coro] if guideline_coro else [])
         results = await asyncio.gather(*all_coros)
 
         for i, name in enumerate(top_diseases):
-            details = results[i]
-            detail = details[0] if details else None
+            detail = results[i]
             if detail:
                 parts.append("\n".join([
                     f"【{detail['name']}】（严重度: {detail['severity']}）",
@@ -123,7 +150,6 @@ class MedicalRetriever:
             if chunks:
                 lines = ["【诊疗指南文献】"]
                 for i, c in enumerate(chunks[:2], 1):
-                    # 保留完整切片内容，提供高保真建议参考
                     lines.append(f"{i}. {c['text'].strip()}")
                 parts.append("\n".join(lines))
 

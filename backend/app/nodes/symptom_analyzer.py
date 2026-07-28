@@ -1,8 +1,11 @@
+import logging
 from typing import Literal, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from app.state import MedicalAgentState
 from app.llm import get_llm
+
+logger = logging.getLogger(__name__)
 
 
 class PatientProfile(BaseModel):
@@ -62,7 +65,8 @@ async def analyze_symptoms(state: MedicalAgentState) -> dict:
         new_symptoms = result.symptoms
         need_more = result.need_more_info
         extracted_profile = result.patient_profile
-    except Exception:
+    except Exception as e:
+        logger.error(f"Symptom extraction failed, keeping current state: {e}", exc_info=True)
         # 结构化输出失败时保留已有状态
         return {"current_stage": "analyzing"}
 

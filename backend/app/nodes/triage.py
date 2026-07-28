@@ -1,10 +1,13 @@
 """分诊/急诊 Agent：红旗症状 → 确定性急救短路"""
 
+import logging
 from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
+
+logger = logging.getLogger(__name__)
 
 # ── 红旗关键词：命中任意一个即短路到急救 ──────────────────────
 RED_FLAG_KEYWORDS: list[str] = [
@@ -99,7 +102,8 @@ async def run_triage(state: MedicalAgentState) -> dict:
             "user_message": user_message,
             "symptoms": ", ".join(state.get("symptoms", [])) or "（尚未提取）",
         })
-    except Exception:
+    except Exception as e:
+        logger.error(f"LLM triage failed, falling back to non-emergency: {e}", exc_info=True)
         # LLM 分诊失败时默认非紧急，不阻塞主流程
         return {"is_emergency": False, "current_stage": "triaged"}
 

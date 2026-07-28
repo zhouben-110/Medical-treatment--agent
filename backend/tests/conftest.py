@@ -1,5 +1,6 @@
 import pytest_asyncio
 import asyncpg
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from medical_kb_mcp.config import get_mcp_settings
 from medical_kb_mcp.models import Base
@@ -27,6 +28,7 @@ async def disease_sessionmaker():
     test_url = await _ensure_test_db()
     engine = create_async_engine(test_url)
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)

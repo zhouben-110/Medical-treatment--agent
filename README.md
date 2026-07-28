@@ -1,6 +1,6 @@
 # 🩺 医疗健康助手 (Medical Agent)
 
-AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGraph Supervisor** 模式实现多 Agent 协同，通过 **Model Context Protocol (MCP)** 对医疗知识层进行微服务级解耦，并基于 **pgvector (PostgreSQL)** 实现高精度的混合 RAG 检索，同时内置多维度的医疗用药安全红线拦截与生产级容灾防护。
+AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGraph Supervisor** 模式实现多 Agent 协同，知识检索层采用进程内直接调用（零 IPC 开销），同时保留 **Model Context Protocol (MCP)** 接口用于外部集成（如 Claude Desktop），并基于 **pgvector (PostgreSQL)** 实现高精度的混合 RAG 检索，同时内置多维度的医疗用药安全红线拦截与生产级容灾防护。
 
 ---
 
@@ -13,10 +13,11 @@ AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGra
 * **精准追问 (Questioner)**：根据现有症状库，自动追问持续时间、伴随症状、病史与过敏史，追问上限设为 5 轮，平衡体验与精度。
 * **诊断报告 (Diagnose & Advise)**：整合知识库 RAG 上下文，一键生成结构化诊断建议，避免多次 LLM 带来的延迟。
 
-### 📚 2. MCP 知识微服务
-提供独立的 `medical_kb_mcp` 服务，解耦核心知识层：
+### 📚 2. 知识检索服务
+提供独立的 `medical_kb_mcp` 包，解耦核心知识层：
 * **三个原子工具**：提供疾病匹配 (`search_diseases_by_symptoms`)、疾病详情 (`get_disease_detail`) 及指南语义检索 (`search_guidelines`)。
-* **双模式运行**：既支持 FastAPI 在进程内直接调用相关模块（无需启动独立进程），也支持挂载至 Claude Desktop（stdio 模式）独立演示。
+* **进程内直接调用**：FastAPI 后端通过 `app/services/kb_service.py` 直接导入并调用上述函数，共享数据库连接池，零 IPC 开销。
+* **MCP 接口保留**：`medical_kb_mcp` 同时挂载为 MCP Server，支持 Claude Desktop（stdio 模式）等外部 MCP 客户端集成。
 
 ### 🔍 3. RAG 检索算法优化
 * **密集与稀疏混合重排**：结合 pgvector 的 Cosine 相似度（占比 60%）和基于症状交集的 Dice 重叠系数（占比 40%）混合打分，兼顾语义理解与精准匹配。
@@ -31,6 +32,10 @@ AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGra
 ### ⚡ 5. 高性能与优雅降级
 * **二级缓存机制**：Redis 分层缓存诊断与检索结果；在 Redis 故障时，系统自动优雅降级为本地内存缓存（LRU 策略）。
 * **Fail-Closed 限流**：默认使用 Redis 滑动窗口限流；若 Redis 宕机，自动退化为内存级滑动窗口限流，确保系统不被刷爆。
+* **连接自愈与多级容灾**：数据库支持 `pool_pre_ping` 与 `pool_recycle` 自愈重连；LLM 客户端集成 API Key 多键随机轮询与 LangChain 原生 `with_fallbacks` 灾备模型自动切换，彻底防御外部接口限频。
+* **向量检索索引优化**：系统启动时自动检测并在 pgvector `diseases` 向量列上按需构建 `HNSW` 空间索引，将检索复杂度从 $O(N)$ 降至 $O(\log N)$，极大降低高并发下的数据库 CPU 负载。
+* **测试连接隔离**：测试环境自动切换为 `NullPool` 以规避 asyncpg 跨事件循环复用异常，并在 conftest 中自动注入 `vector` 扩展。
+* **全链路日志可观测**：节点与检索层全面应用标准异步 `logging` 报错堆栈记录，杜绝历史 `print` 混用和解析异常时“默默吞错”的缺陷。
 
 ### 🗃️ 6. 动态知识库管理平台 (KB Management)
 * **疾病库 CRUD**：支持对疾病条目、典型症状、就医指征的在线增删改查。症状更新时自动重算 1024 维语义特征向量。
@@ -96,13 +101,15 @@ graph LR
     User([用户]) <--> NextJS[Next.js 前端]
     NextJS <--> FastAPI[FastAPI 后端]
     subgraph FastAPI_Backend ["FastAPI 后端"]
-        LangGraph[LangGraph 状态机] <--> MCP[MCP Client]
+        LangGraph[LangGraph 状态机] --> Retriever[RAG Retriever]
+        Retriever --> KB["kb_service (直接调用)"]
         Redis[("Redis 缓存/限流")]
     end
-    subgraph Knowledge_Layer ["独立知识层 (MCP Server)"]
-        MCPServer[MCP Server] --> DB[("PostgreSQL + pgvector")]
+    subgraph Knowledge_Layer ["知识层 (medical_kb_mcp)"]
+        KB --> DB[("PostgreSQL + pgvector")]
+        MCPServer[MCP Server] --> DB
     end
-    MCP <--> MCPServer
+    MCPServer -.->|"外部集成 (Claude Desktop)"| EXT[外部 MCP 客户端]
 ```
 ### 状态流转图
 ```mermaid
@@ -149,7 +156,8 @@ python -m pytest evals/test_eval.py -v -s
 │   ├── app/                    # FastAPI 核心业务代码
 │   │   ├── nodes/              # LangGraph Agent 节点 (Triage/Analyze/Questioner/Diagnose)
 │   │   ├── routers/            # API 端点 (问诊、历史、用户管理、知识库管理 kb.py)
-│   │   ├── rag/                # RAG 检索层
+│   │   ├── services/           # 业务服务层 (kb_service 直接调用知识库，零 IPC 开销)
+│   │   ├── rag/                # RAG 检索编排层
 │   │   ├── safety_rules.py     # 用药安全校验拦截器
 │   │   └── security.py         # Prompt 注入防护与安全净化
 │   ├── medical_kb_mcp/         # 独立 MCP Server (含 pgvector 疾病/指南检索逻辑)

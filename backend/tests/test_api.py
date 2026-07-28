@@ -14,7 +14,11 @@ from app.main import app
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": "Bearer mock-token-user"}
+    ) as ac:
         yield ac
 
 
