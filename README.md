@@ -137,100 +137,36 @@ graph LR
     end
     MCPServer -.->|"外部集成 (Claude Desktop)"| EXT[外部 MCP 客户端]
 ```
-### 状态流转图 (LangGraph 节点与路由映射)
+### 状态流转图 (Supervisor 调度工作流)
 ```mermaid
-stateDiagram-v2
-    direction TB
+flowchart TD
+    Start(["用户发送病情消息"]) --> Supervisor{"Supervisor 调度器"}
 
-    [*] --> supervisor : 用户发送消息
+    %% 阶段 1: 急诊分诊
+    Supervisor -->|"stage = start"| Triage["🚨 急诊分诊 (Triage)<br/>红旗关键词 + LLM 结构化判定"]
+    Triage -->|检出高危急症| Emergency(["⚠️ 触发急救短路 (呼叫 120)"])
+    Triage -->|正常病情| Analyze
 
-    state "supervisor 节点 (路由决策)" as supervisor {
-        [*] --> CheckStage
-        CheckStage --> RedFlagCheck : stage == "start"
-        RedFlagCheck --> RouteEmergency : 命中红旗关键词
-        RedFlagCheck --> RouteTriage : 未命中关键词
-        
-        CheckStage --> RouteAnalyze : stage == "triaged"
-        CheckStage --> LLMDecision : stage == "analyzing"
-        
-        state LLMDecision <<choice>>
-        LLMDecision --> RouteQuestion : need_more_info = true 且 轮次 < 5
-        LLMDecision --> RouteDiagnose : need_more_info = false 或 轮次 ≥ 5
-        
-        CheckStage --> RouteDiagnose : stage == "questioning"
-    }
-
-    state "triage 节点 (分诊短路)" as triage {
-        [*] --> Layer1_RedFlag
-        Layer1_RedFlag --> EmergencyOut : 命中红旗关键词
-        Layer1_RedFlag --> Layer2_LLMTriage : 未命中
-        Layer2_LLMTriage --> EmergencyOut : is_emergency = true
-        Layer2_LLMTriage --> TriagedOut : is_emergency = false
-    }
-
-    state "analyze 节点 (症状与画像提取)" as analyze {
-        [*] --> PydanticExtract : SymptomExtraction
-        PydanticExtract --> UpdateState : 提取 symptoms / severity / patient_profile
-    }
-
-    state "question 节点 (精准追问)" as question {
-        [*] --> GenerateQuestion : 生成 1-3 个针对性问题，更新 stage = "questioning"
-    }
-
-    state "诊断管线 (由 ENABLE_AGENT_DIAGNOSE 决定路线)" as DiagnoseBranch {
-        state "diagnose 节点 (固定管线)" as diagnose {
-            [*] --> CheckCache
-            CheckCache --> RAGRetrieve : 缓存未命中 (60% Cosine + 40% Dice)
-            RAGRetrieve --> SingleLLM : 诊断 + 建议单次 LLM
-            SingleLLM --> SafetyRules1 : intercept_contraindications 用药拦截
-        }
-
-        state "自主 Agent 子图 (ENABLE_AGENT_DIAGNOSE=true)" as AgentSubGraph {
-            state "diagnose_agent 节点" as diagnose_agent {
-                [*] --> LLMDecideTool : 绑定 KB_TOOLS 工具集
-            }
-            
-            state "tools 节点 (ToolNode)" as tools {
-                [*] --> ExecKBTool : 执行 search_diseases / get_disease_detail / search_guidelines
-                ExecKBTool --> RecordTrace : 记录到 tool_trace 与 scratchpad
-            }
-
-            state "finalize 节点" as finalize {
-                [*] --> VerifyTrace : 校验 RETRIEVAL_TOOL_NAMES
-                VerifyTrace --> FallbackNoEvidence : 无检索依据 (防幻觉短路)
-                VerifyTrace --> FormatSubmission : 有有效检索依据
-                FormatSubmission --> SafetyRules2 : intercept_contraindications 用药拦截
-            }
-
-            diagnose_agent --> tools : route_after_agent (需要工具调用)
-            tools --> diagnose_agent : 工具结果返回
-            diagnose_agent --> finalize : route_after_agent (调用 submit_diagnosis / 5 轮上限 / 45s 超时)
-        }
-    }
-
-    supervisor --> triage : route_after_supervisor -> triage
-    supervisor --> END : route_after_supervisor -> finish (急诊短路 / 图结束)
+    %% 阶段 2: 症状分析与追问
+    Supervisor -->|"stage = triaged"| Analyze["📋 症状与患者画像提取 (Analyze)<br/>提取症状、严重度、年龄/孕产/过敏史"]
+    Analyze --> Supervisor
     
-    triage --> END : route_after_triage -> emergency (即刻输出 120 呼叫提示)
-    triage --> supervisor : route_after_triage -> continue (设置 stage = "triaged")
+    Supervisor -->|"stage = analyzing (需补充信息且轮次未满)"| Question["💬 精准追问 (Questioner)<br/>生成 1-3 个针对性追问 (上限 5 轮)"]
+    Question --> WaitUser(["等待用户回复新消息"]) --> Start
 
-    supervisor --> analyze : route_after_supervisor -> analyze
-    analyze --> supervisor : 设置 stage = "analyzing" -> 回 supervisor 决策
+    %% 阶段 3: 诊断报告 (二选一)
+    Supervisor -->|"stage = analyzing (信息充足/轮次满)"| ModeChoice{"诊断管线选择<br/>(ENABLE_AGENT_DIAGNOSE)"}
+    Supervisor -->|"stage = questioning"| ModeChoice
 
-    supervisor --> question : route_after_supervisor -> question
-    question --> END : 设置 stage = "questioning" (等待用户下一轮回复)
+    ModeChoice -->|"false (固定管线)"| Fixed["⚡ 固定诊断管线 (Diagnose & Advise)<br/>pgvector 混合 RAG + 单次 LLM 出建议"]
+    ModeChoice -->|"true (自主 Agent)"| Agent["🧠 自主 Agent 管线 (Diagnose Agent)<br/>自主工具循环检索 + Finalize 依据校验"]
 
-    supervisor --> diagnose : route_after_supervisor -> diagnose (固定管线)
-    supervisor --> diagnose_agent : route_after_supervisor -> diagnose_agent (自主 Agent)
-
-    diagnose --> END : 设置 stage = "completed"
-    finalize --> END : 清空 scratchpad，设置 stage = "completed"
-
-    note right of supervisor
-      诊断完成后 (stage == "completed")：
-      用户继续发送新消息时，系统由 _reset_context_if_needed 摘要旧对话，
-      保留历史症状与诊断结论，并将 stage 重置为 "start" 开启新一轮问诊。
-    end note
+    %% 阶段 4: 后置用药安全拦截
+    Fixed --> Safety["🛡️ 用药安全红线拦截 (Safety Rules)<br/>扫描年龄、孕产哺乳及药物过敏禁忌"]
+    Agent --> Safety
+    
+    Safety --> Finish(["✅ 输出完整诊断报告 (stage = completed)"])
+    Finish -.-|"诊断后用户继续提问"| Reset["上下文摘要重置 (保留历史诊断)"] -.- Start
 ```
 ###  项目效果
 
