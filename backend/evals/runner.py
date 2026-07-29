@@ -1,5 +1,6 @@
 """Eval 执行引擎：支持 mock（快速 CI）和 real（完整 E2E）两种模式"""
 
+import os
 import time
 import re
 from evals.dataset import EvalCase, build_dataset
@@ -136,7 +137,7 @@ async def run_single_real(case: EvalCase) -> EvalResult:
     session_id = str(uuid.uuid4())
     cfg = {"configurable": {"thread_id": session_id}}
 
-    # 构建初始 state
+    # 构建初始 state（与 chat.py 保持一致，含诊断 Agent 字段）
     graph_input = {
         "messages": [{"role": "user", "content": case.user_messages[0]}],
         "symptoms": [],
@@ -150,6 +151,12 @@ async def run_single_real(case: EvalCase) -> EvalResult:
         "is_emergency": False,
         "red_flags": [],
         "emergency_message": "",
+        "patient_profile": {"age_group": None, "is_pregnant": None, "allergies": []},
+        "diagnose_scratchpad": [],
+        "tool_trace": [],
+        "tool_iterations": 0,
+        "diagnose_started_at": 0.0,
+        "agent_llm_failed": False,
     }
 
     try:
@@ -165,6 +172,7 @@ async def run_single_real(case: EvalCase) -> EvalResult:
             question_turns=0,
             passed=False,
             error=str(e),
+            session_id=session_id,
         )
 
     is_emergency = result.get("is_emergency", False)
@@ -197,6 +205,7 @@ async def run_single_real(case: EvalCase) -> EvalResult:
         is_emergency_actual=is_emergency,
         question_turns=question_turns,
         passed=passed,
+        session_id=session_id,
     )
 
 
@@ -214,15 +223,41 @@ async def run_eval_real() -> EvalSummary:
 
 # ── 统一入口 ─────────────────────────────────────────────────
 
-async def run_eval(mode: str = "mock") -> EvalSummary:
+async def run_eval(mode: str = "mock", pipeline: str = "auto") -> EvalSummary:
     """统一 eval 入口
 
     Args:
         mode: "mock" (快速, CI) 或 "real" (完整 E2E)
+        pipeline: 仅 real 模式有效。auto=按环境变量/默认，fixed=固定管线，
+                  agent=自主 Agent 管线。便于 A/B 对比。
     """
     if mode == "mock":
         return await run_eval_mock()
     elif mode == "real":
-        return await run_eval_real()
+        return await run_eval_real(pipeline=pipeline)
     else:
         raise ValueError(f"Unknown eval mode: {mode}. Use 'mock' or 'real'.")
+
+
+async def run_eval_real(pipeline: str = "auto") -> EvalSummary:
+    """Real 模式：运行全部 eval case"""
+    if pipeline == "agent":
+        os.environ["ENABLE_AGENT_DIAGNOSE"] = "1"
+        # 清除 settings 缓存使新值生效
+        from app.config import get_settings
+        get_settings.cache_clear()
+    elif pipeline == "fixed":
+        os.environ["ENABLE_AGENT_DIAGNOSE"] = "0"
+        from app.config import get_settings
+        get_settings.cache_clear()
+
+    cases = build_dataset()
+    start = time.time()
+    results = []
+    for case in cases:
+        result = await run_single_real(case)
+        results.append(result)
+    elapsed = time.time() - start
+    summary = compute_summary(results, elapsed)
+    summary.pipeline = pipeline  # 标记本次用的管线
+    return summary

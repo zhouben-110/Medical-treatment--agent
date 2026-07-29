@@ -14,6 +14,7 @@ class EvalResult:
     question_turns: int
     passed: bool
     error: str | None = None
+    session_id: str | None = None   # graph thread_id，agent 路径复盘用
 
 
 @dataclass
@@ -25,6 +26,7 @@ class EvalSummary:
     emergency_precision: float
     results: list[EvalResult]
     elapsed_seconds: float = 0.0
+    pipeline: str = "auto"   # "fixed" | "agent" | "auto" — 用于 A/B 报告区分
 
     def format_report(self) -> str:
         lines = [
