@@ -230,8 +230,13 @@ async def get_current_user(
         )
 
     token = credentials.credentials
-    logger.debug(f"收到 token, 长度: {len(token)}")
+    settings = get_settings()
     if token in ("mock-token-admin", "mock-token-user"):
+        if settings.environment == "production":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="生产环境禁止使用模拟 Token",
+            )
         role = "admin" if token == "mock-token-admin" else "user"
         supabase_user_id = f"mock-{role}-id"
         email = f"{role}@example.com"

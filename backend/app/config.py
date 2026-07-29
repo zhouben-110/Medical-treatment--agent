@@ -5,6 +5,7 @@ from typing import List
 
 class Settings(BaseSettings):
     app_name: str = "Medical Agent"
+    environment: str = "development"  # "development" | "testing" | "production"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/medical_agent"
     llm_api_key: str = ""
     llm_api_keys: str = ""  # 逗号分隔的 Key 列表，支持随机轮询
@@ -24,6 +25,9 @@ class Settings(BaseSettings):
     sql_echo: bool = False
     mcp_server_url: str = "http://localhost:8765/mcp"
     redis_url: str = "redis://localhost:6379/0"
+
+    # 诊断管线选择：False=固定管线（diagnose_and_advise），True=自主 Agent 循环
+    enable_agent_diagnose: bool = False
 
     # Supabase 配置
     supabase_url: str = ""

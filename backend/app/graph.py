@@ -2,8 +2,12 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
+from app.config import get_settings
 from app.nodes import analyze_symptoms, generate_question
 from app.nodes.diagnose_and_advise import diagnose_and_advise
+from app.nodes.diagnose_agent import (
+    diagnose_agent, tool_executor_node, finalize_diagnosis, route_after_agent,
+)
 from app.nodes.triage import run_triage, _check_red_flags, EMERGENCY_RESPONSE
 from app.llm import get_llm
 
@@ -129,10 +133,15 @@ def route_after_supervisor(state: MedicalAgentState) -> str:
         if target == "finish":
             return "finish"
         if target in VALID_ROUTES:
+            # diagnose 分支按 flag 选固定管线或 Agent
+            if target == "diagnose" and get_settings().enable_agent_diagnose:
+                return "diagnose_agent"
             return target
 
     # 兜底：确定性路由
     route = _deterministic_route(state)
+    if route == "diagnose" and get_settings().enable_agent_diagnose:
+        return "diagnose_agent"
     return "finish" if route == "finish" else route
 
 
@@ -147,6 +156,10 @@ def build_graph() -> StateGraph:
     workflow.add_node("analyze", analyze_symptoms)
     workflow.add_node("question", generate_question)
     workflow.add_node("diagnose", diagnose_and_advise)
+    # 自主诊断 Agent 子图：diagnose_agent ↔ tools → finalize
+    workflow.add_node("diagnose_agent", diagnose_agent)
+    workflow.add_node("tools", tool_executor_node)
+    workflow.add_node("finalize", finalize_diagnosis)
 
     # 入口 → supervisor
     workflow.set_entry_point("supervisor")
@@ -160,6 +173,7 @@ def build_graph() -> StateGraph:
             "analyze": "analyze",
             "question": "question",
             "diagnose": "diagnose",
+            "diagnose_agent": "diagnose_agent",
             "finish": END,
         },
     )
@@ -173,6 +187,15 @@ def build_graph() -> StateGraph:
     workflow.add_edge("analyze", "supervisor")  # 分析完回 supervisor 决策
     workflow.add_edge("question", END)          # 追问直接结束（等下一轮用户输入）
     workflow.add_edge("diagnose", END)          # 诊断+建议完直接结束
+
+    # 自主诊断 Agent 循环
+    workflow.add_conditional_edges(
+        "diagnose_agent",
+        route_after_agent,
+        {"tools": "tools", "finalize": "finalize"},
+    )
+    workflow.add_edge("tools", "diagnose_agent")   # 工具结果回 Agent 决策
+    workflow.add_edge("finalize", END)
 
     return workflow
 

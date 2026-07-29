@@ -5,7 +5,6 @@ from langchain_openai import ChatOpenAI
 from app.config import get_settings
 
 
-@lru_cache()
 def get_llm(temperature: float = 0):
     """获取 LLM 实例（带 Key 轮询与厂商/模型灾备 Fallbacks）"""
     settings = get_settings()

@@ -59,9 +59,10 @@ settings = get_settings()
 
 @app.middleware("http")
 async def global_rate_limit(request: Request, call_next):
-    allowed = await check_rate_limit("rl:global", limit=60, window=60)
+    client_ip = request.client.host if request.client else "unknown"
+    allowed = await check_rate_limit(f"rl:global:{client_ip}", limit=60, window=60)
     if not allowed:
-        return JSONResponse(status_code=429, content={"detail": "Global rate limit exceeded"})
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
     return await call_next(request)
 
 app.add_middleware(

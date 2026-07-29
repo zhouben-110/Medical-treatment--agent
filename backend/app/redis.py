@@ -3,6 +3,7 @@
 import json
 import hashlib
 import time
+import uuid
 import logging
 
 import redis.asyncio as aioredis
@@ -113,7 +114,7 @@ async def check_rate_limit(key: str, limit: int, window: int = 60) -> bool:
         return await check_rate_limit_memory(key, limit, window)
     try:
         now = time.time()
-        member = f"{now}:{id(object())}"
+        member = f"{now}:{uuid.uuid4().hex}"
         pipe = r.pipeline()
         pipe.zremrangebyscore(key, 0, now - window)
         pipe.zcard(key)

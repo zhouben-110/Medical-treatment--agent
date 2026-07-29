@@ -130,9 +130,7 @@ async def _reset_context_if_needed(cfg: dict, graph_input: dict):
         if last_assistant_msg:
             keep_messages.append(last_assistant_msg)
 
-        # update_state 是同步方法，需要用线程执行
-        import asyncio
-        await asyncio.to_thread(graph_module.medical_graph.update_state, cfg, {"messages": keep_messages})
+        await graph_module.medical_graph.aupdate_state(cfg, {"messages": keep_messages})
 
 
 async def _ensure_session_and_log_user(request: ChatRequest, db: AsyncSession, user_id: str) -> Session:
@@ -254,47 +252,111 @@ async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(
         try:
             yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
-            result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)
+            # ── 节点级真流式：astream(stream_mode="updates") ────────
+            # 每个节点跑完立即 yield 该节点的 state 增量，用户能实时看到
+            # "正在分诊/分析/追问" 状态推进，不再是 10s 空白。
+            #
+            # 为什么不走 token 级流式（astream_events / chain.astream）：
+            # 当前 langgraph + PostgresSaver 组合下，astream_events 回调会被吞，
+            # 实测 0 个 on_chat_model_stream 事件出来。chain.astream + StreamWriter
+            # 是更可靠的方案，但需要改 diagnose/question/finalize 三个节点用
+            # get_stream_writer().write() 把 token 推出来，列为后续工作。
+            final_output: dict = {}
+            streamed_text = ""
+            accumulated = dict(graph_input)
+
+            def _sse(payload: dict) -> str:
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            STATUS_LABELS = {
+                "triage": "正在分诊",
+                "analyze": "正在分析症状",
+                "question": "正在生成追问",
+                "diagnose": "正在生成诊断",
+                "finalize": "正在生成诊断报告",
+            }
+            USER_FACING_NODES = {"diagnose", "question", "finalize", "triage", "supervisor"}
+
+            try:
+                async for chunk in graph_module.medical_graph.astream(
+                    graph_input, config=cfg, stream_mode="updates"
+                ):
+                    for node_name, state_delta in chunk.items():
+                        if node_name in STATUS_LABELS:
+                            yield _sse({"type": "status", "stage": node_name,
+                                        "content": STATUS_LABELS[node_name]})
+                        if isinstance(state_delta, dict):
+                            accumulated.update(state_delta)
+                            if state_delta.get("messages") and node_name in USER_FACING_NODES:
+                                msgs = state_delta["messages"]
+                                last = msgs[-1]
+                                content = (
+                                    getattr(last, "content", None)
+                                    or (last.get("content") if isinstance(last, dict) else "")
+                                    or ""
+                                )
+                                if content and not streamed_text:
+                                    streamed_text = content
+                                    yield _sse({"type": "chunk",
+                                                "content": content,
+                                                "stage": node_name})
+            except Exception as e:
+                logger.error(f"astream failed, fallback to ainvoke: {e}", exc_info=True)
+                result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)
+                accumulated = result
+                msgs = result.get("messages") or []
+                if msgs:
+                    last = msgs[-1]
+                    content = (
+                        getattr(last, "content", None)
+                        or (last.get("content") if isinstance(last, dict) else None)
+                        or ""
+                    )
+                    if content and not streamed_text:
+                        streamed_text = content
+                        yield _sse({"type": "chunk", "content": content, "stage": "fallback"})
+
             await invalidate_session_cache(session_id)
+            final_output = accumulated
 
-            stage = result.get("current_stage", "unknown")
+            stage = final_output.get("current_stage", "unknown")
             if stage == "completed":
-                yield f"data: {json.dumps({'type': 'stage', 'stage': 'completed'}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "stage", "stage": "completed"})
             elif stage == "emergency":
-                yield f"data: {json.dumps({'type': 'stage', 'stage': 'emergency'}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "stage", "stage": "emergency"})
             elif stage == "questioning":
-                yield f"data: {json.dumps({'type': 'stage', 'stage': 'questioning'}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "stage", "stage": "questioning"})
 
-            last_msg = result["messages"][-1] if result.get("messages") else None
-            ai_text = (
-                getattr(last_msg, "content", None)
-                or (last_msg.get("content") if isinstance(last_msg, dict) else None)
-                or ""
-            )
-            if ai_text:
-                chunk_size = 20
-                for i in range(0, len(ai_text), chunk_size):
-                    chunk = ai_text[i:i + chunk_size]
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk, 'stage': stage}, ensure_ascii=False)}\n\n"
+            # 如果 streamed_text 为空，但累计 state 中有 assistant 消息（例如急诊/分诊），从中提取
+            if not streamed_text and final_output.get("messages"):
+                last_m = final_output["messages"][-1]
+                content = (
+                    getattr(last_m, "content", None)
+                    or (last_m.get("content") if isinstance(last_m, dict) else "")
+                    or ""
+                )
+                role = getattr(last_m, "type", None) or (last_m.get("role") if isinstance(last_m, dict) else "")
+                if content and role in ("ai", "assistant"):
+                    streamed_text = content
+                    yield _sse({"type": "chunk", "content": content, "stage": stage})
 
-            symptoms = result.get("symptoms", []) or []
-            diseases = result.get("possible_diseases") or []
-            need_more = bool(result.get("need_more_info", False))
-            final_meta = {
+            symptoms = final_output.get("symptoms", []) or []
+            diseases = final_output.get("possible_diseases") or []
+            need_more = bool(final_output.get("need_more_info", False))
+            yield _sse({
                 "type": "meta",
                 "session_id": session_id,
                 "symptoms": symptoms,
                 "stage": stage,
                 "need_more_info": need_more,
                 "possible_diseases": diseases,
-            }
-            yield f"data: {json.dumps(final_meta, ensure_ascii=False)}\n\n"
+            })
 
             diagnosis = diseases[0] if (stage == "completed" and diseases) else None
-            if ai_text:
-                await _persist_assistant_msg(session_id, ai_text, diagnosis)
+            if streamed_text:
+                await _persist_assistant_msg(session_id, streamed_text, diagnosis)
 
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            yield _sse({"type": "done"})
         except Exception as e:
             logger.error(f"Error in chat_stream generator: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'content': 'Server error'}, ensure_ascii=False)}\n\n"
@@ -319,11 +381,7 @@ async def update_symptoms(body: UpdateSymptomsRequest, user: User = Depends(get_
     if not st or st.values is None:
         raise HTTPException(status_code=404, detail="未找到会话或状态")
 
-    import asyncio
-    await asyncio.to_thread(
-        graph_module.medical_graph.update_state,
-        cfg,
-        {"symptoms": body.symptoms}
-    )
+    await graph_module.medical_graph.aupdate_state(cfg, {"symptoms": body.symptoms})
     await invalidate_session_cache(session_id)
     return {"ok": True, "symptoms": body.symptoms}
+
