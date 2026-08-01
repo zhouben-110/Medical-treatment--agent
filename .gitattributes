@@ -1,0 +1,40 @@
+# 统一换行符，防止跨平台 (Windows CRLF / Linux-macOS LF) 产生整文件 diff
+* text=auto
+
+# 文本文件统一使用 LF
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.css   text eol=lf
+*.conf  text eol=lf
+*.ini   text eol=lf
+*.toml  text eol=lf
+*.txt   text eol=lf
+*.mako  text eol=lf
+*.example text eol=lf
+Dockerfile text eol=lf
+*.gitignore text eol=lf
+*.dockerignore text eol=lf
+
+# 明确标记二进制，避免被 text=auto 误判
+*.bin   binary
+*.db    binary
+*.db-shm binary
+*.db-wal binary
+*.sqlite3 binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary

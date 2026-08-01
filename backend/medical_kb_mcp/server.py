@@ -54,8 +54,8 @@ async def search_guidelines_tool(
 ) -> list[GuidelineChunk]:
     """在诊疗指南向量库中按语义检索相关片段。
 
-    返回 GuidelineChunk 列表，每项含 text（指南片段）与 score（相似度距离，越小越相关）。
-    向量库不可用时返回空列表（优雅降级）。
+    返回 GuidelineChunk 列表，每项含 text（指南片段）、score（cosine similarity，0~1 越大越相似）
+    与 source（指南来源标题，便于溯源）。向量库不可用时返回空列表（优雅降级）。
     """
     return await search_guidelines(query, k)
 

@@ -414,7 +414,9 @@ async def test_search(body: SearchTestRequest):
         return {
             "mode": "guidelines",
             "query": body.query,
-            "results": [{"text": r.text, "score": r.score} for r in results],
+            "results": [
+                {"text": r.text, "score": r.score, "source": r.source} for r in results
+            ],
         }
     elif body.mode == "diseases":
         from medical_kb_mcp.db import search_diseases_by_symptoms

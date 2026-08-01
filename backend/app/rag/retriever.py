@@ -24,7 +24,7 @@ class MedicalRetriever:
         args_hash = hashlib.sha256(
             json.dumps({"symptoms": symptoms, "limit": limit}, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:16]
-        cache_key = f"mc:tool:search_diseases_by_symptoms:{args_hash}"
+        cache_key = f"mc:tool:v2:search_diseases_by_symptoms:{args_hash}"
         cached = await cache_get(cache_key)
         if cached is not None:
             return cached
@@ -48,7 +48,7 @@ class MedicalRetriever:
     async def _get_detail_cached(self, name: str) -> dict | None:
         """Call get_disease_detail with Redis caching."""
         args_hash = hashlib.sha256(name.encode()).hexdigest()[:16]
-        cache_key = f"mc:tool:get_disease_detail:{args_hash}"
+        cache_key = f"mc:tool:v2:get_disease_detail:{args_hash}"
         cached = await cache_get(cache_key)
         if cached is not None:
             return cached
@@ -74,7 +74,7 @@ class MedicalRetriever:
         args_hash = hashlib.sha256(
             json.dumps({"query": query, "k": k}, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:16]
-        cache_key = f"mc:tool:search_guidelines:{args_hash}"
+        cache_key = f"mc:tool:v2:search_guidelines:{args_hash}"
         cached = await cache_get(cache_key)
         if cached is not None:
             return cached
@@ -117,7 +117,8 @@ class MedicalRetriever:
         if chunks:
             lines = ["【诊疗指南文献参考】"]
             for i, c in enumerate(chunks[:2], 1):
-                lines.append(f"{i}. {c['text'].strip()}")
+                src = f"（来源：{c['source']}）" if c.get("source") else ""
+                lines.append(f"{i}. {c['text'].strip()}{src}")
             parts.append("\n".join(lines))
 
         return "\n".join(parts) if parts else "", disease_names
@@ -150,7 +151,8 @@ class MedicalRetriever:
             if chunks:
                 lines = ["【诊疗指南文献】"]
                 for i, c in enumerate(chunks[:2], 1):
-                    lines.append(f"{i}. {c['text'].strip()}")
+                    src = f"（来源：{c['source']}）" if c.get("source") else ""
+                    lines.append(f"{i}. {c['text'].strip()}{src}")
                 parts.append("\n".join(lines))
 
         return "\n\n".join(parts) if parts else ""

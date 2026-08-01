@@ -1,0 +1,18 @@
+# 提交信息遵循 Conventional Commits 规范
+# <type>: <subject>   (subject 建议中文，简短描述意图)
+#
+# 常用 type：
+#   feat      新功能
+#   fix       修复 bug
+#   docs      仅文档变更
+#   refactor  重构（不改功能、不修 bug）
+#   style     格式/空白调整，不影响代码逻辑
+#   test      增加或修正测试
+#   chore     构建、工具、依赖等杂项
+#   perf      性能优化
+#
+# 可选作用域（括号内）：
+#   feat(kb): 新增知识库 MCP 检索接口
+#   fix(triage): 修复空输入崩溃
+#
+# 使用方式：git config commit.template .gitmessage

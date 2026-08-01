@@ -1,0 +1,18 @@
+# 后端 Python 代码规范配置
+# 安装 ruff 后运行：ruff check .
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# 自动生成的迁移脚本不参与规范检查
+exclude = [
+    "alembic/versions",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+# E=pycodestyle 错误  F=pyflakes  I=isort 排序  W=pycodestyle 警告
+# UP=pyupgrade 现代化  B=bugbear 常见陷阱
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "medical_kb_mcp"]

@@ -230,7 +230,15 @@ async def ensure_embedding_column(sessionmaker=None) -> None:
     logger.info("Ensured symptom_embedding column exists.")
 
 
-async def seed(sessionmaker=None) -> int:
+async def seed(sessionmaker=None, force_reembed: bool = False) -> int:
+    """灌入疾病种子数据并生成 symptom_embedding。
+
+    疾病向量使用 text_type="query"，与 app/routers/kb.py 建病时的 embed_query
+    及 app/services 检索侧的 embed_query 保持一致（同一列内的向量必须同型）。
+
+    force_reembed=True 时对已有的 25 个内置疾病重新计算 embedding，
+    用于 embedding 配置变更后的存量数据迁移。
+    """
     from medical_kb_mcp.vectors import embed_texts
 
     if sessionmaker is None:
@@ -242,10 +250,11 @@ async def seed(sessionmaker=None) -> int:
 
     inserted = 0
     backfilled = 0
+    reembedded = 0
 
-    # 预计算所有疾病的 embedding
+    # 预计算所有疾病的 embedding（query 类型，与 kb.py / db.py 检索侧同型）
     symptom_texts = ["、".join(e["symptoms"]) for e in DISEASE_KNOWLEDGE]
-    embeddings = await embed_texts(symptom_texts)
+    embeddings = await embed_texts(symptom_texts, text_type="query")
 
     async with sessionmaker() as session:
         for entry, embedding in zip(DISEASE_KNOWLEDGE, embeddings):
@@ -265,18 +274,26 @@ async def seed(sessionmaker=None) -> int:
                     severity=entry["severity"],
                 ))
                 inserted += 1
-            elif disease.symptom_embedding is None:
-                # 已有疾病但缺少 embedding：补算
+            elif disease.symptom_embedding is None or force_reembed:
+                # 缺少 embedding 时补算；或强制按新配置重算（迁移用）
+                was_none = disease.symptom_embedding is None
                 disease.symptom_embedding = embedding
-                backfilled += 1
+                if was_none:
+                    backfilled += 1
+                else:
+                    reembedded += 1
 
         await session.commit()
 
     if backfilled:
         logger.info("Backfilled embeddings for %d existing diseases.", backfilled)
+    if reembedded:
+        logger.info("Re-embedded %d existing diseases.", reembedded)
     return inserted
 
 
 if __name__ == "__main__":
-    n = asyncio.run(seed())
-    print(f"Seeded {n} new diseases.")
+    import sys
+    force = "--reembed" in sys.argv
+    n = asyncio.run(seed(force_reembed=force))
+    print(f"Seeded {n} new diseases. (force_reembed={force})")

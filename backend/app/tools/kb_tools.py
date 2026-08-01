@@ -29,7 +29,8 @@ def _cache_key(name: str, payload: dict) -> str:
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()[:16]
-    return f"mc:tool:{name}:{digest}"
+    # v2：检索分值与返回结构变更后，避免命中旧语义的缓存
+    return f"mc:tool:v2:{name}:{digest}"
 
 
 async def _cached_call(name: str, payload: dict, factory, ttl: int, empty):
@@ -119,8 +120,9 @@ async def search_guidelines(query: str, k: int = 3) -> list[dict]:
         k: 返回片段数，默认 3。
 
     Returns:
-        每项含 text（指南原文片段）与来源元数据。返回空列表表示
-        指南库无相关内容，此时应基于 search_diseases 的结果作答。
+        每项含 text（指南原文片段）、score（cosine similarity，0~1 越大越相似）、
+        source（指南来源标题，用于溯源）。返回空列表表示指南库无相关内容，
+        此时应基于 search_diseases 的结果作答。
     """
     async def _run():
         chunks = await _search_guidelines(query, k)
