@@ -81,12 +81,21 @@ async def diagnose_and_advise(state: MedicalAgentState) -> dict:
     # LLM 生成建议（流式输出到前端）
     llm = get_llm(temperature=0.3)
     chain = ChatPromptTemplate.from_template(ADVICE_PROMPT) | llm
-    response = await chain.ainvoke({
-        "symptoms": ", ".join(symptoms),
-        "conversation_history": history,
-        "medical_context": full_context or "（无相关知识库数据）",
-    })
-    advice = response.content
+    try:
+        response = await chain.ainvoke({
+            "symptoms": ", ".join(symptoms),
+            "conversation_history": history,
+            "medical_context": full_context or "（无相关知识库数据）",
+        })
+        advice = response.content
+    except Exception as e:
+        logger.error(f"诊断建议生成 LLM 调用失败: {e}", exc_info=True)
+        advice = (
+            "基于您提供的症状，系统暂时无法生成具体的诊断建议。"
+            "建议您结合症状变化密切观察，如症状加重或持续不缓解，请及时前往医院就诊。\n\n"
+            "⚠️ 免责声明：本系统提供的信息仅供参考，不作为医学诊断和治疗依据。"
+        )
+
     # 用药安全红线拦截与提示注入
     advice = intercept_contraindications(advice, state.get("patient_profile"))
 

@@ -13,6 +13,7 @@ from app.redis import (
     track_session,
 )
 from app.security import check_prompt_injection
+from langgraph.errors import GraphRecursionError
 import json
 import logging
 
@@ -60,6 +61,9 @@ async def _persist_assistant_msg(session_id: str, content: str, diagnosis: str |
         await db.commit()
 
 
+VALID_STAGES = {"start", "triaged", "analyzing", "questioning", "diagnosing", "completed", "emergency"}
+
+
 def _build_graph_input(user_message: str, session_id: str, is_new: bool, current_stage: str = "start", prev_state: dict = None) -> dict:
     if is_new:
         return {
@@ -77,8 +81,14 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool, current
             "emergency_message": "",
             "patient_profile": {"age_group": None, "is_pregnant": None, "allergies": []},
         }
-    # 诊断完成后用户继续提问，重置状态开启新一轮诊断
-    if current_stage == "completed":
+
+    # ⑤ 续轮 stage 归一化：若持久化的 current_stage 不在已知合法集合内或残留 supervisor 中间态，重置为 start
+    if current_stage not in VALID_STAGES or current_stage.startswith("supervisor:"):
+        logger.warning(f"检测到异常/残留持久化 current_stage={current_stage!r}，归一化重置为 'start'")
+        current_stage = "start"
+
+    # 诊断完成或状态被重置后，开启/恢复诊断
+    if current_stage in ("completed", "start"):
         # 保留上一轮的症状和诊断结论
         old_symptoms = prev_state.get("symptoms", []) if prev_state else []
         old_diseases = prev_state.get("possible_diseases", []) if prev_state else []
@@ -97,7 +107,7 @@ def _build_graph_input(user_message: str, session_id: str, is_new: bool, current
             "red_flags": [],
             "emergency_message": "",
             "patient_profile": old_profile,
-            "_reset_context": True,  # 标记需要清理旧上下文
+            "_reset_context": True if current_stage == "completed" else False,
         }
     return {"messages": [{"role": "user", "content": user_message}]}
 
@@ -160,7 +170,7 @@ async def chat(request: Request, body: ChatRequest, user: User = Depends(get_cur
     session_id = str(session.id)
     await track_session(session_id)
 
-    cfg = {"configurable": {"thread_id": session_id}}
+    cfg = {"configurable": {"thread_id": session_id}, "recursion_limit": 20}
 
     # 检查 Redis 会话缓存
     cached_state = await get_cached_session_state(session_id)
@@ -184,7 +194,13 @@ async def chat(request: Request, body: ChatRequest, user: User = Depends(get_cur
 
     graph_input = _build_graph_input(body.message, session_id, is_new, current_stage, prev_state)
     await _reset_context_if_needed(cfg, graph_input)
-    result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)
+    try:
+        result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)
+    except GraphRecursionError as e:
+        logger.error(f"路由死循环被 recursion_limit 截断: {e}", exc_info=True)
+        await graph_module.medical_graph.aupdate_state(cfg, {"current_stage": "completed"})
+        raise HTTPException(status_code=500, detail="系统繁忙，请稍后重试")
+
     await invalidate_session_cache(session_id)
 
     last_msg = result["messages"][-1] if result.get("messages") else None
@@ -220,7 +236,7 @@ async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(
         session_id = str(session.id)
         await track_session(session_id)
 
-        cfg = {"configurable": {"thread_id": session_id}}
+        cfg = {"configurable": {"thread_id": session_id}, "recursion_limit": 20}
 
         # 检查 Redis 会话缓存
         cached_state = await get_cached_session_state(session_id)
@@ -300,6 +316,14 @@ async def chat_stream(request: Request, body: ChatRequest, user: User = Depends(
                                     yield _sse({"type": "chunk",
                                                 "content": content,
                                                 "stage": node_name})
+            except GraphRecursionError as e:
+                logger.error(f"路由死循环被 recursion_limit 截断: {e}", exc_info=True)
+                # 恢复线程到安全阶段，避免下轮继续卡死
+                await graph_module.medical_graph.aupdate_state(
+                    cfg, {"current_stage": "completed"}
+                )
+                yield _sse({"type": "error", "content": "系统繁忙，请稍后重试"})
+                return
             except Exception as e:
                 logger.error(f"astream failed, fallback to ainvoke: {e}", exc_info=True)
                 result = await graph_module.medical_graph.ainvoke(graph_input, config=cfg)

@@ -1,6 +1,11 @@
+import logging
 from langchain_core.prompts import ChatPromptTemplate
 from app.state import MedicalAgentState
 from app.llm import get_llm
+
+logger = logging.getLogger(__name__)
+
+FALLBACK_QUESTION = "请问您这些症状持续多久了？是否有既往病史或过敏史？"
 
 QUESTION_PROMPT = """你是一个医疗AI助手。根据已知症状，生成追问问题。
 
@@ -30,12 +35,17 @@ async def generate_question(state: MedicalAgentState) -> dict:
         history_lines.append(f"{role}: {text}")
     history = "\n".join(history_lines)
 
-    response = await chain.ainvoke({
-        "symptoms": ", ".join(state.get("symptoms", [])),
-        "conversation_history": history
-    })
+    try:
+        response = await chain.ainvoke({
+            "symptoms": ", ".join(state.get("symptoms", [])),
+            "conversation_history": history
+        })
+        question_text = response.content
+    except Exception as e:
+        logger.error(f"追问生成 LLM 调用失败: {e}", exc_info=True)
+        question_text = FALLBACK_QUESTION
 
     return {
-        "messages": [{"role": "assistant", "content": response.content}],
+        "messages": [{"role": "assistant", "content": question_text}],
         "current_stage": "questioning"
     }

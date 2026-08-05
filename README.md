@@ -80,6 +80,8 @@ AI 驱动的多 Agent 症状分析与健康咨询系统。系统基于 **LangGra
 * **二级缓存机制**：Redis 分层缓存诊断与检索结果；在 Redis 故障时，系统自动优雅降级为本地内存缓存（LRU 策略）。
 * **IP 级滑动窗口限流**：支持基于 IP 维度的 Redis 滑动窗口限流（带 UUID 唯一成员防护），Redis 宕机时自动退化为内存级限流。
 * **连接自愈与多级容灾**：数据库支持 `pool_pre_ping` 与 `pool_recycle` 自愈重连；LLM 客户端集成动态 API Key 随机轮询与 LangChain 原生 `with_fallbacks` 灾备模型自动切换。
+* **图循环防护与状态自愈**：设置 `STAGE_ALLOWED` 阶段路由语义白名单（如禁止 `analyzing` 阶段重入 `analyze`），从源头阻断死循环；配置 `recursion_limit: 20` 溢出熔断并自动恢复 checkpoint 状态；续轮对话时自动对持久化的残留异常 stage 进行归一化重置。
+* **全节点 LLM 崩溃兜底**：全量 LLM 节点（Supervisor/Questioner/Diagnose）均具备 `try-except` 捕获与确定性文案降级能力，单点 LLM 故障时绝不崩穿或挂起整图。
 * **异步 Checkpoint 管理**：全链路采用 LangGraph 原生 `aupdate_state` 异步状态管理，彻底消除跨线程同步阻塞与状态丢失。
 * **向量检索索引优化**：系统启动时自动检测并在 pgvector `diseases` 向量列上按需构建 `HNSW` 空间索引，将检索复杂度从 $O(N)$ 降至 $O(\log N)$，极大降低高并发下的数据库 CPU 负载。
 * **测试连接隔离**：测试环境自动切换为 `NullPool` 以规避 asyncpg 跨事件循环复用异常，并在 conftest 中自动注入 `vector` 扩展。
@@ -233,34 +235,100 @@ python -c "from evals.runner import run_eval; import asyncio; print(asyncio.run(
 
 ## 📂 项目结构
 
-```
+```text
 .
-├── CONTRIBUTING.md               # 贡献指南（代码规范、提交规范、分支策略）
-├── DEPLOY.md                     # Docker Compose 部署指南
-├── 知识库设计.md                   # 动态知识库管理与 RAG 架构设计文档
-├── backend/
-│   ├── app/                      # FastAPI 核心业务代码
-│   │   ├── nodes/                # LangGraph Agent 节点 (Triage/Analyze/Questioner/Diagnose + 自主诊断 Agent)
-│   │   ├── tools/                # 自主诊断 Agent 的 LangChain 工具集 (4 个 @tool)
-│   │   ├── routers/              # API 端点 (问诊、历史、用户管理、知识库管理 kb.py)
-│   │   ├── services/             # 业务服务层 (kb_service 直接调用知识库，零 IPC 开销)
-│   │   ├── rag/                  # RAG 检索编排层
-│   │   ├── safety_rules.py       # 用药安全校验拦截器
-│   │   └── security.py           # Prompt 注入防护与安全净化
-│   ├── medical_kb_mcp/           # 独立 MCP Server (含 pgvector 疾病/指南检索逻辑)
-│   ├── evals/                    # 评测用例集与运行引擎
-│   ├── alembic/                  # 数据库迁移脚本
-│   ├── data/guidelines/          # 诊疗指南 Markdown 数据源
-│   ├── pyproject.toml            # ruff 代码规范配置
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── app/                  # Next.js 页面与路由 (包含 /admin/kb 知识库管理面板)
-│   │   ├── components/           # 问诊状态机 UI 组件 (进度指示、症状更正标签)
-│   │   ├── api/                  # 前端 API 客户端 (client.ts & kb.ts)
-│   ├── .eslintrc.json            # ESLint 代码规范配置
-│   └── next.config.js
-└── docker-compose.yml            # 一键集成部署配置
+├── 📄 CONTRIBUTING.md                  # 贡献指南（代码规范、提交规范、分支策略）
+├── 📄 DEPLOY.md                        # Docker Compose 生产部署与环境配置指南
+├── 📄 知识库设计.md                      # 动态知识库管理、向量切片与 RAG 检索设计文档
+├── 📄 docker-compose.yml               # PostgreSQL+pgvector / Redis / 后端 / 前端服务编排
+├── 📄 nginx.conf                       # 反向代理与 HTTPS / 流式 SSE 转发配置
+├── 📄 claude_desktop_config.example.json # Claude Desktop MCP 配置文件模版
+├── 📁 backend/                         # 后端服务根目录 (FastAPI + LangGraph)
+│   ├── 📄 start.py                     # 后端 Uvicorn 服务启动入口
+│   ├── 📄 requirements.txt             # 后端 Python 依赖列表
+│   ├── 📄 pyproject.toml               # Python 项目配置 (Ruff 格式化与 Pytest 配置)
+│   ├── 📄 alembic.ini                  # Alembic 数据库迁移配置文件
+│   ├── 📁 app/                         # FastAPI 核心业务逻辑
+│   │   ├── 📄 main.py                  # FastAPI 主应用入口、Lifespan 声明周期管理与全局中间件
+│   │   ├── 📄 graph.py                 # LangGraph StateGraph Supervisor 状态机编排与确定性路由
+│   │   ├── 📄 state.py                 # MedicalAgentState 全局 TypedDict 状态结构定义
+│   │   ├── 📄 llm.py                   # DashScope / ChatOpenAI 模型客户端配置与 Disaster Fallback 降级
+│   │   ├── 📄 auth.py                  # JWT 身份认证、密码 Hash 校验与双层 Key 校验逻辑
+│   │   ├── 📄 database.py              # SQLAlchemy 2.x asyncpg 数据库异步连接池管理
+│   │   ├── 📄 redis.py                 # Redis 异步客户端与基于 UUID 的 IP 滑动窗口限流器
+│   │   ├── 📄 cache.py                 # LRU 内存级诊断结果二级缓存实现
+│   │   ├── 📄 safety_rules.py          # 年龄/孕产哺乳/过敏史用药安全红线二次校验拦截器
+│   │   ├── 📄 security.py              # Prompt 注入防护、敏感词过滤与日志字符串脱敏
+│   │   ├── 📄 summarizer.py            # 基于 LLM 的长对话历史滚动摘要压缩服务
+│   │   ├── 📄 mcp_client.py            # 进程内 MCP 客户端封装 (零 IPC 开销直调内核)
+│   │   ├── 📄 models.py                # SQLAlchemy ORM 数据库实体映射定义 (User, Session, Message)
+│   │   ├── 📄 schemas.py               # Pydantic HTTP 请求与响应数据校验模型
+│   │   ├── 📁 nodes/                   # LangGraph 多 Agent 原子节点目录
+│   │   │   ├── 📄 triage.py            # 🚨 急诊分诊节点 (29 个红旗关键词短路拦截与急症判定)
+│   │   │   ├── 📄 symptom_analyzer.py  # 📋 结构化症状与患者画像提取节点 (带合并去重)
+│   │   │   ├── 📄 questioner.py        # 💬 精准追问生成节点 (限制最多 5 轮追问)
+│   │   │   ├── 📄 diagnose_and_advise.py # ⚡ 固定管线诊断与建议生成节点 (单次 LLM 出报告)
+│   │   │   └── 📄 diagnose_agent.py    # 🧠 自主诊断 Agent 子图 (LLM 自主工具循环与 Finalize 校验)
+│   │   ├── 📁 tools/                   # 自主诊断 Agent 调用的工具集
+│   │   │   └── 📄 kb_tools.py          # 4 个 @tool 工具定义 (匹配疾病/查详情/查指南/提交诊断)
+│   │   ├── 📁 rag/                     # RAG 检索算法编排
+│   │   │   └── 📄 retriever.py         # Cosine 向量语义 (60%) + Dice 症状交集 (40%) 混合重排检索器
+│   │   ├── 📁 services/                # 业务服务逻辑
+│   │   │   └── 📄 kb_service.py        # 知识库直接调用服务层 (共享数据库连接池)
+│   │   └── 📁 routers/                 # FastAPI RESTful API 路由层
+│   │       ├── 📄 chat.py              # 问诊对话核心 API (支持普通 HTTP 与 SSE 流式 /chat/stream)
+│   │       ├── 📄 history.py           # 会话历史记录查询与持久化 API
+│   │       ├── 📄 symptoms.py          # 症状识别与前端标签化修改 API
+│   │       ├── 📄 auth.py              # 用户注册、登录、Token 刷新 API
+│   │       ├── 📄 admin.py             # 管理员面板 API
+│   │       └── 📄 kb.py                # 动态知识库 CRUD 与诊疗指南切片批量导入 API
+│   ├── 📁 medical_kb_mcp/              # 独立医学知识库 MCP (Model Context Protocol) 模块
+│   │   ├── 📄 server.py                # MCP Standard IO (stdio) 模式 Server 启动入口
+│   │   ├── 📄 vectors.py               # pgvector 向量嵌入计算与 Cosine/Dice 混合打分引擎
+│   │   ├── 📄 db.py                    # 知识库数据库模型与异步 Query 封装
+│   │   ├── 📄 seed_diseases.py         # 25 种常见疾病种子数据初始化脚本 (含自动 Embedding)
+│   │   ├── 📄 seed_guidelines.py       # 诊疗指南 Markdown 文档段落切片导入脚本
+│   │   └── 📄 config.py                # MCP 独立配置
+│   ├── 📁 evals/                       # 自动化评测引擎与测试沙箱
+│   │   ├── 📄 runner.py                # 问诊评测沙箱运行引擎 (支持 Fixed/Agent 管线对比)
+│   │   ├── 📄 cases.json               # 35 个真实医学问诊 Golden Test Dataset 测试集
+│   │   └── 📄 test_eval.py             # CI/CD 自动化评测入口
+│   ├── 📁 alembic/                     # 数据库版本迁移脚本目录
+│   └── 📁 tests/                       # 后端 pytest 单元测试与集成测试套件
+│       ├── 📄 test_api.py              # API 接口集成测试
+│       ├── 📄 test_triage.py           # 急诊分诊规则测试
+│       ├── 📄 test_symptom_analyzer_structured.py # 症状提取与解析测试
+│       ├── 📄 test_retriever_mcp.py    # RAG 混合检索分值测试
+│       └── 📄 test_graph_resilience.py # 🛡️ 图路由防死循环、超时熔断与自愈降级测试
+└── 📁 frontend/                        # 前端 Web 应用根目录 (Next.js 14 + React 18)
+    ├── 📄 package.json                 # 前端 Node.js 项目依赖与脚本配置
+    ├── 📄 tailwind.config.ts           # Tailwind CSS 主题颜色与样式配置
+    ├── 📄 tsconfig.json                # TypeScript 编译选项配置
+    ├── 📄 next.config.js               # Next.js 运行配置 (含反向代理与标头)
+    └── 📁 src/                         # 前端源代码
+        ├── 📄 middleware.ts            # Next.js 前端路由访问权限保护中间件
+        ├── 📁 app/                     # Next.js 14 App Router 页面路由
+        │   ├── 📄 layout.tsx           # 全局 HTML 结构与 Context Provider 包裹层
+        │   ├── 📄 page.tsx             # 首页 / 问诊大厅主界面
+        │   ├── 📄 globals.css          # 全局 CSS 样式与 Tailwind 指令
+        │   ├── 📁 login/               # 用户登录认证页面
+        │   └── 📁 admin/kb/            # 动态知识库管理平台 (疾病 CRUD / 指南切片 / 评测沙箱)
+        ├── 📁 components/              # React 交互 UI 组件库
+        │   ├── 📄 ChatBox.tsx          # 问诊主对话框与输入组件
+        │   ├── 📄 MessageList.tsx      # 对话消息列表渲染组件 (支持流式文本打字机效果)
+        │   ├── 📄 SymptomTags.tsx      # 可交互的已知症状识别与修改标签组件
+        │   ├── 📄 StatusIndicator.tsx  # 多 Agent 状态推进与节点指示器
+        │   └── 📄 DiagnosisReport.tsx  # 结构化诊断建议报告与用药安全警示展示组件
+        ├── 📁 contexts/                # React Context 全局状态管理
+        │   ├── 📄 AuthContext.tsx      # 用户登录状态与 Token 存储 Context
+        │   └── 📄 ChatContext.tsx      # 当前问诊 Session 状态与消息流 Context
+        ├── 📁 hooks/                   # 自定义 React Hooks
+        │   ├── 📄 useChat.ts           # 问诊对话业务逻辑 Hook
+        │   └── 📄 useSSE.ts            # SSE (Server-Sent Events) 事件流长连接接收 Hook
+        ├── 📁 api/                     # 前端 HTTP 与 SSE API 请求客户端
+        │   ├── 📄 client.ts            # Axios / Fetch HTTP 基础请求封装 (含 JWT Header 自动注入)
+        │   └── 📄 kb.ts                # 知识库管理端专用 API 客户端
+        └── 📁 types/                   # TypeScript 类型定义文件 (Message, Stage, Symptom, KBItem 等)
 ```
 
 ---

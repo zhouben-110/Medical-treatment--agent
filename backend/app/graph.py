@@ -11,6 +11,10 @@ from app.nodes.diagnose_agent import (
 from app.nodes.triage import run_triage, _check_red_flags, EMERGENCY_RESPONSE
 from app.llm import get_llm
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 MAX_USER_TURNS = 5
 
 
@@ -45,6 +49,15 @@ SUPERVISOR_PROMPT = """你是一个医疗多 Agent 系统的调度器。根据�
 
 VALID_ROUTES = {"triage", "analyze", "question", "diagnose", "finish"}
 
+# 阶段路由语义白名单：当前阶段允许转换到的目标 Agent，彻底堵死语法合规但语义越界的循环漏洞
+STAGE_ALLOWED = {
+    "start": {"triage"},
+    "triaged": {"analyze"},
+    "analyzing": {"question", "diagnose"},
+    "questioning": {"diagnose"},
+    "diagnosing": {"diagnose"},
+}
+
 
 async def supervisor_node(state: MedicalAgentState) -> dict:
     """Supervisor 节点：决定路由目标（优先确定性路由，仅 analyzing 阶段用 LLM）"""
@@ -73,16 +86,24 @@ async def supervisor_node(state: MedicalAgentState) -> dict:
         llm = get_llm(temperature=0)
         prompt = ChatPromptTemplate.from_template(SUPERVISOR_PROMPT)
         chain = prompt | llm
-        response = await chain.ainvoke({
-            "current_stage": stage,
-            "symptoms": ", ".join(state.get("symptoms", [])) or "（无）",
-            "is_emergency": "是" if state.get("is_emergency") else "否",
-            "need_more_info": "是" if state.get("need_more_info", True) else "否",
-            "user_turns": _count_user_turns(state.get("messages", [])),
-            "max_turns": MAX_USER_TURNS,
-        })
-        route = response.content.strip().lower()
-        if route not in VALID_ROUTES:
+        try:
+            response = await chain.ainvoke({
+                "current_stage": stage,
+                "symptoms": ", ".join(state.get("symptoms", [])) or "（无）",
+                "is_emergency": "是" if state.get("is_emergency") else "否",
+                "need_more_info": "是" if state.get("need_more_info", True) else "否",
+                "user_turns": _count_user_turns(state.get("messages", [])),
+                "max_turns": MAX_USER_TURNS,
+            })
+            route = response.content.strip().lower()
+        except Exception as e:
+            logger.error(f"Supervisor LLM 调用失败: {e}", exc_info=True)
+            route = _deterministic_route(state)
+
+        # 校验语义白名单
+        allowed = STAGE_ALLOWED.get(stage, set())
+        if route not in allowed:
+            logger.warning(f"Supervisor 输出越界/非法路由 {route!r} (stage={stage})，回退确定性路由")
             route = _deterministic_route(state)
         return {"current_stage": f"supervisor:{route}"}
 
